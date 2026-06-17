@@ -893,26 +893,31 @@ def _md(s: str) -> str:
 
 
 def push_telegram(text: str) -> bool:
+    """Send to all chat IDs in TELEGRAM_CHAT_ID (comma-separated for multiple recipients)."""
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
+    raw_ids = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not raw_ids:
         log.error("TELEGRAM_TOKEN / TELEGRAM_CHAT_ID not set — cannot push.")
         return False
+    chat_ids = [c.strip() for c in raw_ids.split(",") if c.strip()]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        resp = requests.post(url, timeout=HTTP_TIMEOUT, data={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": "false",
-        })
-        if resp.status_code != 200:
-            log.error("Telegram push failed %s: %s", resp.status_code, resp.text[:200])
-            return False
-        return True
-    except Exception as exc:
-        log.error("Telegram push error: %s", exc)
-        return False
+    all_ok = True
+    for chat_id in chat_ids:
+        try:
+            resp = requests.post(url, timeout=HTTP_TIMEOUT, data={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": "false",
+            })
+            if resp.status_code != 200:
+                log.error("Telegram push failed for %s — %s: %s",
+                          chat_id, resp.status_code, resp.text[:200])
+                all_ok = False
+        except Exception as exc:
+            log.error("Telegram push error for %s: %s", chat_id, exc)
+            all_ok = False
+    return all_ok
 
 
 # ──────────────────────────────────────────────────────────────────────────
