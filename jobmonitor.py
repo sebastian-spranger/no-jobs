@@ -131,7 +131,7 @@ USER_AGENT = (
     "contact: repo owner)"
 )
 HTTP_TIMEOUT = _env_int("HTTP_TIMEOUT", 25)
-MAX_ITEMS_PER_SOURCE = _env_int("MAX_ITEMS_PER_SOURCE", 60)
+MAX_ITEMS_PER_SOURCE = _env_int("MAX_ITEMS_PER_SOURCE", 300)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -212,14 +212,24 @@ For each posting return:
 
 SOURCES: list[dict[str, Any]] = [
     # ---- Tier B: climate / sustainability boards (RSS) ----
-    # greenjobs.de Atom feed — VERIFIED working (returns Atom XML with ~200
-    # env-sector entries). `zeitraum` = lookback window in days; seen.json
-    # dedupes so a wide window is harmless, only run-1 scores the backlog.
+    # greenjobs.de Atom feed — VERIFIED working (returns Atom XML with ~250
+    # env-sector entries on a 14-day window). seen.json dedupes so the wide
+    # window is harmless; only new postings are scored each run.
     {
         "name": "greenjobs.de",
         "tier": "B",
         "type": "rss",
-        "url": "https://www.greenjobs.de/angebote/neueste.html?zeitraum=7&feed=atom",
+        "url": "https://www.greenjobs.de/angebote/neueste.html?zeitraum=14&feed=atom",
+        "verified": True,
+    },
+    # EGU (European Geosciences Union) job board RSS — VERIFIED working (~10
+    # entries, all geosciences/meteorology). Directly relevant to urban climate /
+    # biometeorology positions across European research institutions.
+    {
+        "name": "EGU job board",
+        "tier": "B",
+        "type": "rss",
+        "url": "https://www.egu.eu/jobs/rss/",
         "verified": True,
     },
     # ---- Tier C: general search, queried with her keyword combos ----
@@ -234,7 +244,7 @@ SOURCES: list[dict[str, Any]] = [
             '("thermal comfort" OR biometeorology OR "urban climate" OR '
             '"urban microclimate" OR "climate adaptation" OR Bauphysik OR '
             '"sustainable architecture") (postdoc OR researcher OR scientist OR '
-            'consultant OR engineer) (München OR Munich OR remote)'
+            'consultant OR engineer) (München OR Munich OR remote OR EU)'
         ),
         "verified": False,
     },
@@ -248,6 +258,16 @@ SOURCES: list[dict[str, Any]] = [
         "url": "https://transsolar.com/jobs",
         "link_must_match": r"(job|stelle|career|vacan|position)",
         "verified": True,  # returns job links in testing; LLM filters out nav noise
+    },
+    # Drees & Sommer — Munich-based sustainability / engineering consultancy.
+    # Full job listings page; VERIFIED 200 with ~18 current roles.
+    {
+        "name": "Drees & Sommer",
+        "tier": "D",
+        "type": "html",
+        "url": "https://career.dreso.com/de/stellenangebote",
+        "link_must_match": r"(stellenangebote/details|job|vacan|position)",
+        "verified": True,
     },
 ]
 
@@ -421,10 +441,15 @@ def fetch_html(src: dict[str, Any]) -> list[Posting]:
     postings: list[Posting] = []
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
+        # Skip non-HTTP links (mailto:, tel:, javascript:, anchors)
+        if not href.startswith(("http", "/")) or href.startswith("#"):
+            continue
         text = a.get_text(" ").strip()
-        if not text or len(text) < 8:
+        if not text or len(text) < 10:
             continue
         full = requests.compat.urljoin(base, href)  # type: ignore[attr-defined]
+        if not full.startswith("http"):
+            continue
         if not pattern.search(full) and not pattern.search(text):
             continue
         if full in seen_links:
@@ -556,12 +581,20 @@ _UNRELATED = re.compile(
 # posting as low-prior (still allowed through to the cheap prefilter, but this
 # helps the prefilter and gives us a free skip for totally off-topic items).
 _DOMAIN = re.compile(
-    r"\b(thermal comfort|thermischer komfort|biometeorolog|microclimate|mikroklima|"
-    r"urban climate|stadtklima|urban heat|hitze|heat island|climate adaptation|"
-    r"klimaanpassung|climate.responsive|bauphysik|building physics|sustainable building|"
-    r"nachhaltige|green building|dgnb|leed|facade|fassade|urban design|stadtgestaltung|"
-    r"environmental meteorolog|umweltmeteorolog|pet|utci|envi-?met|rayman|skyhelios|"
-    r"comfort engineering|livability|resilien)\b",
+    r"\b(thermal comfort|thermischer komfort|thermische behaglichkeit|"
+    r"biometeorolog|microclimate|mikroklima|"
+    r"urban climate|stadtklima|urban heat|hitze|heat island|wärmeinsel|"
+    r"climate adaptation|klimaanpassung|klimaschutz|"
+    r"climate.responsive|climate consultant|klimaberater|"
+    r"bauphysik|building physics|gebäudephysik|"
+    r"sustainable building|nachhalt|green building|dgnb|leed|"
+    r"facade|fassade|urban design|stadtgestaltung|stadtplanung|"
+    r"environmental meteorolog|umweltmeteorolog|"
+    r"urban planning|stadtentwicklung|"
+    r"pet|utci|envi-?met|rayman|skyhelios|"
+    r"comfort engineering|livability|resilien|"
+    r"outdoor comfort|wind comfort|solar radiation|"
+    r"raumklima|innenraumklima|gebäudeklimatik)\b",
     re.I,
 )
 

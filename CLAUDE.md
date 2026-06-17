@@ -57,8 +57,10 @@ Defined in `SOURCES`; each logs a `verified`/`UNVERIFIED` tag + item count per r
 
 | Source | Tier | Type | Status |
 |--------|------|------|--------|
-| greenjobs.de | B | rss (Atom) | ✅ verified (~60 items) |
+| greenjobs.de | B | rss (Atom) | ✅ verified (~256 items, 14-day window) |
+| EGU job board | B | rss | ✅ verified (~10 items, European Geosciences Union) |
 | Transsolar careers | D | html | ✅ verified (job links) |
+| Drees & Sommer | D | html | ✅ verified (~18 items, Munich sustainability consultancy) |
 | Google Programmable Search | C | google_cse | ⚙️ gated (no-op without keys) |
 
 `DISABLED_SOURCES` (documented, not run): **EURAXESS** (403s automated clients), **jobs.ac.uk** (bot-blocks fetchers / 404), **Fraunhofer IBP** (JS SuccessFactors portal). Each needs a dedicated fetcher or routing through Programmable Search.
@@ -87,6 +89,7 @@ python jobmonitor.py --test     # push one sample match (no scrape/API)
 
 > Newest first. One line each: `YYYY-MM-DD — what changed (why)`.
 
+- 2026-06-18 — Added EGU RSS + Drees & Sommer + Werner Sobek sources; widened greenjobs.de to 14-day window (256 items); expanded domain hard-filter regex with more German/English synonyms; moved to own git repo (jobmonitor-rose).
 - 2026-06-17 — Added `.env` auto-loader (`_load_env_file`, one gitignored secrets file) and out-of-credits Telegram alert (`NoCreditsError`/`_is_credit_error`/`NO_CREDITS_MESSAGE`, exit code 3). Went live on the "No Jobs for Rose" bot; test ping confirmed.
 - 2026-06-17 — Added CLAUDE.md + a Stop hook that reminds Claude to keep it updated.
 - 2026-06-17 — Source-hardening: greenjobs.de set to verified Atom feed; added gated Google CSE Tier C fetcher (`fetch_google_cse`); moved EURAXESS/jobs.ac.uk/Fraunhofer IBP to `DISABLED_SOURCES` (confirmed unscrapeable by generic fetcher); added per-source verified/UNVERIFIED log tag.
