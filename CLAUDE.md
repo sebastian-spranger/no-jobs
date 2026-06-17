@@ -47,7 +47,7 @@ gather() ─▶ dedup() ─▶ drop seen ─▶ hard_filter() ─▶ prefilter()
 
 `MIN_FIT_SCORE`=70 · `MAYBE_MIN_SCORE`=50 · `PREFILTER_MIN`=40 · `MAX_LLM_CALLS`=40 · `SCORE_BATCH`=8 · `SCORING_MODEL` · `PREFILTER_MODEL` · `SEEN_FILE` · `MATCHES_FILE`.
 
-Secrets: `ANTHROPIC_API_KEY` (scoring), `TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID` (push). Optional Tier C: `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` (+ `GOOGLE_CSE_PAGES`, `GOOGLE_CSE_DATERESTRICT`).
+Secrets: `ANTHROPIC_API_KEY` (scoring), `TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID` (push — comma-separated for multiple recipients, e.g. `id1,id2`). Optional Tier C: `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` (+ `GOOGLE_CSE_PAGES`, `GOOGLE_CSE_DATERESTRICT`).
 
 **Secrets live in a gitignored `.env`** at the repo root — one file, auto-loaded by `_load_env_file()` at startup so `python jobmonitor.py` works with nothing exported. Real env vars / CI secrets always override it (loader never clobbers an already-set var). NEVER commit `.env`; for the GitHub Actions run, put the same values in repo Secrets. Live bot: "No Jobs for Rose" (`@NoJobsforRoseBot`).
 
@@ -89,7 +89,8 @@ python jobmonitor.py --test     # push one sample match (no scrape/API)
 
 > Newest first. One line each: `YYYY-MM-DD — what changed (why)`.
 
-- 2026-06-18 — Added EGU RSS + Drees & Sommer + Werner Sobek sources; widened greenjobs.de to 14-day window (256 items); expanded domain hard-filter regex with more German/English synonyms; moved to own git repo (jobmonitor-rose).
+- 2026-06-18 — Multi-recipient Telegram: `TELEGRAM_CHAT_ID` now accepts comma-separated chat IDs (e.g. `7143335971,7647141150`) — both Rose and the monitor owner get every ping.
+- 2026-06-18 — Added EGU RSS + Drees & Sommer sources; widened greenjobs.de to 14-day window (256 items); bumped `MAX_ITEMS_PER_SOURCE` to 300; fixed `fetch_html` to skip mailto/tel/anchor hrefs; expanded domain hard-filter regex with German synonyms; moved to own git repo (jobmonitor-rose).
 - 2026-06-17 — Added `.env` auto-loader (`_load_env_file`, one gitignored secrets file) and out-of-credits Telegram alert (`NoCreditsError`/`_is_credit_error`/`NO_CREDITS_MESSAGE`, exit code 3). Went live on the "No Jobs for Rose" bot; test ping confirmed.
 - 2026-06-17 — Added CLAUDE.md + a Stop hook that reminds Claude to keep it updated.
 - 2026-06-17 — Source-hardening: greenjobs.de set to verified Atom feed; added gated Google CSE Tier C fetcher (`fetch_google_cse`); moved EURAXESS/jobs.ac.uk/Fraunhofer IBP to `DISABLED_SOURCES` (confirmed unscrapeable by generic fetcher); added per-source verified/UNVERIFIED log tag.
