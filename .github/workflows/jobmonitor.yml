@@ -1,0 +1,90 @@
+name: jobmonitor
+
+# Runs the job monitor on a schedule (every 4 h) and on manual dispatch.
+# State (seen.json / matches.json) is committed back to the repo, exactly like
+# a lightweight cloud scraper. Runs free on GitHub Actions.
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"   # alle 4 Stunden — keep in sync with CHECK_CRON in jobmonitor.py
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Gather + score but do not push or persist"
+        type: boolean
+        default: false
+
+# Allow the workflow to push the updated state files back.
+permissions:
+  contents: write
+
+# Never run two instances at once (avoids push races / double pings).
+concurrency:
+  group: jobmonitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run job monitor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Optional: enable Tier C Google Programmable Search (no-op if unset).
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          # Optional overrides (uncomment to tune without code changes):
+          # MIN_FIT_SCORE: "70"
+          # MAX_LLM_CALLS: "40"
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python jobmonitor.py --dry-run
+          else
+            python jobmonitor.py
+          fi
+
+      - name: Commit state (seen.json / matches.json)
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          git config user.name  "jobmonitor-bot"
+          git config user.email "jobmonitor-bot@users.noreply.github.com"
+
+          # Nothing to do if state is unchanged.
+          if git diff --quiet -- seen.json matches.json 2>/dev/null; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+
+          git add seen.json matches.json
+
+          # Rebase-retry loop to survive push races with a concurrent run.
+          for attempt in 1 2 3 4 5; do
+            git commit -m "chore(state): update seen/matches [skip ci]" || {
+              echo "Nothing staged; exiting."
+              exit 0
+            }
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push failed (attempt $attempt); rebasing on remote..."
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          done
+
+          echo "Could not push state after retries." >&2
+          exit 1

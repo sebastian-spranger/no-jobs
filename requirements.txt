@@ -1,0 +1,5 @@
+# Job-Monitor dependencies
+anthropic>=0.69.0      # Claude API (scoring) — structured outputs via output_config.format
+requests>=2.31.0       # HTTP for sources + Telegram
+feedparser>=6.0.11     # robust RSS/Atom parsing (Tier A/B sources)
+beautifulsoup4>=4.12.0 # defensive HTML parsing (Tier D employer pages)
