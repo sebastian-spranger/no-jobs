@@ -125,7 +125,9 @@ Environment overrides (no code changes needed):
 | `MAX_LLM_CALLS`   | `120` | hard cap on API calls per run, **per track** (cost ceiling) |
 | `MAX_AGE_DAYS`    | `21` | drop postings older than this (when the post date is known) |
 | `SCORE_BATCH`     | `8`  | postings scored per LLM call |
-| `SCORING_MODEL` / `PREFILTER_MODEL` | `claude-opus-4-8` / `claude-haiku-4-5` | precise scorer / cheap first pass |
+| `SCORING_MODEL` | `claude-opus-4-8` | niche-track scorer (precision) |
+| `EASY_SCORING_MODEL` | `claude-sonnet-4-6` | easy-track scorer (cheaper; high volume) |
+| `PREFILTER_MODEL` | `claude-haiku-4-5` | cheap first pass (both tracks) |
 | `EASY_MIN_SCORE` / `EASY_MAYBE_MIN` | `50` / `35` | easy-track push / maybe thresholds |
 | `EASY_ENABLED`    | `1`  | set `0` to disable the easy track entirely |
 | `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | – | optional free [Adzuna](https://developer.adzuna.com/signup) key (extra easy-track volume); no-op if unset |
@@ -237,13 +239,19 @@ file; the scoring weights are `SCORING_INSTRUCTIONS`. Edit those to retune fit.
 
 ## Cost notes
 
-- The rubric is sent as a **cached** system prompt; postings are **batched**
-  (`SCORE_BATCH` per call); the Haiku prefilter keeps most traffic off Opus.
-- `MAX_LLM_CALLS` is a hard per-run ceiling — if hit, the run logs it and stops
-  scoring rather than spending more. With a 4-hour cron and modest source
-  volume, typical cost is a few cents per day.
-- Hard filters (junior/unrelated/no-domain-signal) run **before** any LLM call,
-  so obvious noise never costs a token.
+- **Steady-state ≈ $0.30/day (~$9/mo)** at the current recall-mode settings
+  (6×/day, both tracks). The dominant cost is scoring; the Haiku prefilter keeps
+  most volume off it, and `seen.json` means each run only scores postings that are
+  **new** since the last run — so it's a handful per run, not the whole backlog.
+  A first run (or a full `--dry-run`) scores the entire backlog and costs ~$1–2 once.
+- **Scoring is per track:** Opus on the niche track (precision), the cheaper Sonnet
+  on the high-volume easy track (`EASY_SCORING_MODEL`) — ~40% off with negligible
+  quality loss. The rubric is a **cached** system prompt; postings are **batched**.
+- **To spend less:** after the urgent job-search sprint, revert recall mode (cron
+  back to 4×/day, raise `MIN_FIT_SCORE`); or set `SCORING_MODEL=claude-sonnet-4-6`
+  for the niche track too. `MAX_LLM_CALLS` is a hard per-run ceiling either way.
+- Hard filters + the scam/freshness gate run **before** any LLM call, so junk
+  never costs a token.
 
 ---
 

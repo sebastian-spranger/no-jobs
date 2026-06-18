@@ -146,7 +146,12 @@ DEADLINE_WATCH_DAYS = _env_int("DEADLINE_WATCH_DAYS", 21)  # <= -> 🟠 bald bew
 DEADLINE_MAX_CALLS  = _env_int("DEADLINE_MAX_CALLS", 12)   # eigener LLM-Deckel für Deadline-Extraktion
 DEADLINE_PAGE_CHARS = _env_int("DEADLINE_PAGE_CHARS", 6000)  # wieviel Seitentext an die LLM geht
 
-SCORING_MODEL   = os.environ.get("SCORING_MODEL", "claude-opus-4-8")
+# Scoring model is PER TRACK: Opus for the niche track (her real field — precision
+# matters, low volume) and the cheaper Sonnet for the high-volume easy track (a
+# bounded rubric fit-score is well within Sonnet's range). Cuts the dominant cost
+# ~40% with negligible quality loss where it matters least. Override per track.
+SCORING_MODEL      = os.environ.get("SCORING_MODEL", "claude-opus-4-8")        # niche track
+EASY_SCORING_MODEL = os.environ.get("EASY_SCORING_MODEL", "claude-sonnet-4-6")  # easy track
 PREFILTER_MODEL = os.environ.get("PREFILTER_MODEL", "claude-haiku-4-5")
 
 CHECK_CRON      = "0 */4 * * *"                       # alle 4 Stunden (siehe workflow yml)
@@ -1728,7 +1733,8 @@ def prefilter(client, postings: list[Posting], budget: LLMBudget, track: "Track"
 
 
 def score(client, postings: list[Posting], budget: LLMBudget, track: "Track") -> list[Posting]:
-    """Precise Opus pass: fills score/reason/location_fit/language_flag/work_mode in place."""
+    """Precise scoring pass (track.scoring_model): fills score/reason/location_fit/
+    language_flag/work_mode in place."""
     if not postings:
         return []
     system = track.rubric + "\n\n" + track.scoring_instructions
@@ -1741,7 +1747,7 @@ def score(client, postings: list[Posting], budget: LLMBudget, track: "Track") ->
         user = "Score each posting (one JSON per line):\n" + _postings_block(batch)
         try:
             budget.spend()
-            data = _call_structured(client, SCORING_MODEL, system, user, _SCORE_SCHEMA)
+            data = _call_structured(client, track.scoring_model, system, user, _SCORE_SCHEMA)
             by_id = {r["id"]: r for r in data.get("results", [])}
             for p in batch:
                 r = by_id.get(p.id)
@@ -1758,7 +1764,7 @@ def score(client, postings: list[Posting], budget: LLMBudget, track: "Track") ->
         except Exception as exc:
             log.warning("  scoring batch failed (%s); skipping batch", exc)
     log.info("Scoring (%s): %d postings scored (LLM calls used: %d/%d)",
-             SCORING_MODEL, len(scored), budget.used, budget.cap)
+             track.scoring_model, len(scored), budget.used, budget.cap)
     return scored
 
 
@@ -2150,6 +2156,7 @@ class Track:
     label: str                     # human name for logs
     rubric: str
     scoring_instructions: str
+    scoring_model: str             # Opus (niche) / Sonnet (easy) — cost vs precision
     prefilter_instructions: str
     sources: list[dict[str, Any]]
     seen_file: str
@@ -2176,6 +2183,7 @@ MAIN_TRACK = Track(
     label="Niche fit · No Jobs for Rose",
     rubric=CANDIDATE_RUBRIC,
     scoring_instructions=SCORING_INSTRUCTIONS,
+    scoring_model=SCORING_MODEL,
     prefilter_instructions=MAIN_PREFILTER_INSTRUCTIONS,
     sources=SOURCES,
     seen_file=SEEN_FILE,
@@ -2198,6 +2206,7 @@ EASY_TRACK = Track(
     label="Easy / adjacent · No Easy Jobs for Rose",
     rubric=EASY_RUBRIC,
     scoring_instructions=EASY_SCORING_INSTRUCTIONS,
+    scoring_model=EASY_SCORING_MODEL,
     prefilter_instructions=EASY_PREFILTER_INSTRUCTIONS,
     sources=EASY_SOURCES,
     seen_file=EASY_SEEN_FILE,
