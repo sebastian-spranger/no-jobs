@@ -46,7 +46,7 @@ import re
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 import requests
@@ -115,6 +115,14 @@ LOCATIONS = [
 
 MAX_LLM_CALLS   = _env_int("MAX_LLM_CALLS", 40)      # Kostendeckel pro Lauf (gesamt, beide Stufen)
 SCORE_BATCH     = _env_int("SCORE_BATCH", 8)         # Postings pro LLM-Call (Batching senkt Kosten)
+
+# Deadline enrichment: fetch the job page for each strong/maybe match and pull
+# the application deadline (it is NOT in the RSS/HTML feed snippets). Own small
+# LLM budget so it never starves scoring. Drives the priority label in the ping.
+DEADLINE_SOON_DAYS  = _env_int("DEADLINE_SOON_DAYS", 7)    # <= -> 🔴 dringend
+DEADLINE_WATCH_DAYS = _env_int("DEADLINE_WATCH_DAYS", 21)  # <= -> 🟠 bald bewerben
+DEADLINE_MAX_CALLS  = _env_int("DEADLINE_MAX_CALLS", 6)    # eigener LLM-Deckel für Deadline-Extraktion
+DEADLINE_PAGE_CHARS = _env_int("DEADLINE_PAGE_CHARS", 6000)  # wieviel Seitentext an die LLM geht
 
 SCORING_MODEL   = os.environ.get("SCORING_MODEL", "claude-opus-4-8")
 PREFILTER_MODEL = os.environ.get("PREFILTER_MODEL", "claude-haiku-4-5")
@@ -333,6 +341,9 @@ class Posting:
     reason: str = ""
     location_fit: str = "unknown"
     language_flag: str = "unknown"
+    # filled in by the deadline-enrichment stage (fetches the full job page)
+    deadline: str = ""        # ISO "YYYY-MM-DD", or "rolling", or "" if unknown
+    priority: str = ""        # human label, set in run() from deadline + score
 
     @property
     def id(self) -> str:
@@ -846,6 +857,174 @@ def _chunk(seq: list[Any], n: int) -> Iterable[list[Any]]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# 7b. Deadline enrichment (the deadline is NOT in the feed snippet — fetch the
+#     full job page and let the cheap model pull the application deadline).
+# ──────────────────────────────────────────────────────────────────────────
+
+_DEADLINE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    # ISO date, or "rolling" for ongoing/no fixed date, or
+                    # "unknown" if the page states no deadline.
+                    "deadline": {"type": "string"},
+                },
+                "required": ["id", "deadline"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["results"],
+    "additionalProperties": False,
+}
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def fetch_page_text(url: str) -> str:
+    """Best-effort plain text of a job page (for deadline extraction). Fail-open."""
+    try:
+        resp = _http_get(url)
+    except Exception as exc:
+        log.warning("  deadline: could not fetch %s (%s)", url, exc)
+        return ""
+    text = _clean_text(resp.text)
+    # _clean_text caps at 600; re-extract with a wider window for deadlines.
+    if BeautifulSoup is not None:
+        try:
+            text = re.sub(r"\s+", " ",
+                          BeautifulSoup(resp.text, "html.parser").get_text(" ")).strip()
+        except Exception:
+            pass
+    return text[:DEADLINE_PAGE_CHARS]
+
+
+def enrich_deadlines(client, postings: list[Posting], budget: LLMBudget) -> None:
+    """Fetch each posting's page and fill p.deadline in place (ISO/rolling/'')."""
+    if not postings:
+        return
+    today = _today_iso()
+    system = (
+        "You extract the APPLICATION DEADLINE from a job posting's page text. "
+        f"Today is {today}. Return for each id exactly one of:\n"
+        '  - an ISO date "YYYY-MM-DD" if a clear application deadline / '
+        '"Bewerbungsfrist" / "Bewerbungsschluss" / "apply by" / "closing date" is stated '
+        "(resolve relative phrases like 'within 3 weeks' against today);\n"
+        '  - "rolling" if it says ongoing / "laufend" / "bis zur Besetzung" / until filled / no fixed date;\n'
+        '  - "unknown" if no deadline information is present.\n'
+        "Do not guess. Output only id + deadline."
+    )
+    pages: list[dict[str, str]] = []
+    for p in postings:
+        txt = fetch_page_text(p.url)
+        if txt:
+            pages.append({"id": p.id, "title": p.title, "page_text": txt})
+    if not pages:
+        return
+    by_id = {p.id: p for p in postings}
+    for batch in _chunk(pages, SCORE_BATCH):
+        if not budget.allow():
+            log.warning("  deadline: LLM budget reached; %d postings left without a deadline",
+                        len(pages) - pages.index(batch[0]))
+            break
+        user = "Extract the application deadline for each posting:\n" + "\n".join(
+            json.dumps(b, ensure_ascii=False) for b in batch)
+        try:
+            budget.spend()
+            data = _call_structured(client, PREFILTER_MODEL, system, user, _DEADLINE_SCHEMA)
+            for r in data.get("results", []):
+                p = by_id.get(r.get("id", ""))
+                if not p:
+                    continue
+                d = (r.get("deadline") or "").strip().lower()
+                if d == "rolling":
+                    p.deadline = "rolling"
+                elif _ISO_DATE_RE.match(d):
+                    p.deadline = d
+                # "unknown" / anything else -> leave "" (unknown)
+        except NoCreditsError:
+            raise
+        except Exception as exc:
+            log.warning("  deadline batch failed (%s); leaving those unknown", exc)
+    known = sum(1 for p in postings if p.deadline)
+    log.info("Deadline enrichment: %d/%d postings got a deadline (LLM calls used: %d/%d)",
+             known, len(postings), budget.used, budget.cap)
+
+
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _in_days(n: int) -> str:
+    """ISO date n days from today (used for the --test sample)."""
+    return (datetime.now(timezone.utc).date() + timedelta(days=n)).isoformat()
+
+
+def _days_until(iso_date: str) -> int | None:
+    """Whole days from today (UTC) to an ISO date; None if unparseable."""
+    try:
+        d = datetime.strptime(iso_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return (d - datetime.now(timezone.utc).date()).days
+
+
+def assign_priority(p: Posting) -> None:
+    """Set p.priority from deadline urgency (primary) and score (tie-break)."""
+    if p.deadline == "rolling":
+        p.priority = "🟢 LAUFEND"
+        return
+    days = _days_until(p.deadline) if p.deadline else None
+    if days is None:
+        p.priority = "⚪ FRIST UNBEKANNT"
+    elif days < 0:
+        p.priority = "⚫ ABGELAUFEN"
+    elif days <= DEADLINE_SOON_DAYS:
+        p.priority = f"🔴 DRINGEND · {days} Tage"
+    elif days <= DEADLINE_WATCH_DAYS:
+        p.priority = f"🟠 BALD · {days} Tage"
+    else:
+        p.priority = f"🟢 ZEIT · {days} Tage"
+
+
+def _priority_rank(p: Posting) -> tuple[int, int]:
+    """Sort key: more urgent first, then higher score. Lower tuple = higher up."""
+    days = _days_until(p.deadline) if p.deadline and p.deadline != "rolling" else None
+    if days is not None and days >= 0 and days <= DEADLINE_SOON_DAYS:
+        bucket = 0
+    elif days is not None and days >= 0 and days <= DEADLINE_WATCH_DAYS:
+        bucket = 1
+    elif p.deadline == "rolling" or (days is not None and days > DEADLINE_WATCH_DAYS):
+        bucket = 2
+    elif days is not None and days < 0:
+        bucket = 4          # expired -> bottom
+    else:
+        bucket = 3          # unknown deadline
+    return (bucket, -p.score)
+
+
+def _deadline_label(p: Posting) -> str:
+    """Human deadline line for the Telegram message."""
+    if p.deadline == "rolling":
+        return "⏳ Bewerbung laufend / bis zur Besetzung"
+    if not p.deadline:
+        return "⏳ Bewerbungsfrist unbekannt — auf der Seite prüfen"
+    days = _days_until(p.deadline)
+    if days is None:
+        return f"⏳ Bewerbungsfrist: {p.deadline}"
+    if days < 0:
+        return f"⏳ Frist abgelaufen ({p.deadline})"
+    if days == 0:
+        return f"⏳ Bewerbungsfrist: HEUTE ({p.deadline})"
+    return f"⏳ Bewerbungsfrist: {p.deadline} (in {days} Tagen)"
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # 8. Notifier (Telegram)
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -876,8 +1055,13 @@ def format_message(p: Posting) -> str:
     """Telegram Markdown message in the spec's format."""
     lines = [
         f"💼 *{_md(p.title)}*  {_stars(p.score)}{p.score}/100",
+    ]
+    if p.priority:
+        lines.append(f"🚦 *{_md(p.priority)}*")
+    lines += [
         f"🏢 {_md(p.employer)} · _{_md(p.source)}_",
         f"📍 {_md(_loc_label(p))}   🗣 {_lang_label(p.language_flag)}",
+        _md(_deadline_label(p)),
     ]
     if p.reason:
         lines.append(f"🎯 {_md(p.reason)}")
@@ -1007,10 +1191,26 @@ def run(dry_run: bool = False) -> int:
     log.info("Results: %d push (>=%d), %d maybe (%d-%d)",
              len(pushes), MIN_FIT_SCORE, len(maybes), MAYBE_MIN_SCORE, MIN_FIT_SCORE - 1)
 
+    # Enrich the actionable matches with a real application deadline (fetched
+    # from each job page) and assign an urgency-based priority label.
+    actionable = pushes + maybes
+    if actionable:
+        try:
+            enrich_deadlines(client, actionable, LLMBudget(DEADLINE_MAX_CALLS))
+        except NoCreditsError as exc:
+            log.error("Out of credits during deadline enrichment (%s) — alerting", exc)
+            push_telegram(NO_CREDITS_MESSAGE)
+            return 3
+        for p in actionable:
+            assign_priority(p)
+    # Most urgent first within the push (deadline buckets, then score).
+    pushes.sort(key=_priority_rank)
+
     if dry_run:
         log.info("--dry-run: not pushing or persisting. Top results:")
         for p in (pushes + maybes)[:15]:
-            log.info("  %3d  %-14s  %s", p.score, p.location_fit, p.title[:70])
+            log.info("  %3d  %-12s  %-22s  %s",
+                     p.score, p.location_fit, p.priority or "—", p.title[:60])
         return 0
 
     # Push the strong matches (precision over recall on the ping).
@@ -1058,7 +1258,9 @@ def run_test() -> int:
         reason="Deep niche match: outdoor thermal comfort + urban microclimate in Munich.",
         location_fit="munich",
         language_flag="english",
+        deadline=_in_days(5),  # sample: deadline 5 days out -> 🔴 DRINGEND
     )
+    assign_priority(sample)
     ok = push_telegram(format_message(sample))
     if ok:
         log.info("Sample match pushed successfully.")

@@ -34,18 +34,20 @@ microclimate / sustainable building physics + AI).
 
 ```
 gather() ─▶ dedup() ─▶ drop seen ─▶ hard_filter() ─▶ prefilter()[Haiku] ─▶ score()[Opus]
-   ─▶ push score ≥ MIN_FIT_SCORE to Telegram ─▶ persist seen.json / matches.json
+   ─▶ enrich_deadlines()[Haiku, fetches job page] ─▶ assign_priority()
+   ─▶ push score ≥ MIN_FIT_SCORE to Telegram (urgency-sorted) ─▶ persist seen.json / matches.json
 ```
 
 - **Models:** `SCORING_MODEL=claude-opus-4-8` (precise), `PREFILTER_MODEL=claude-haiku-4-5` (cheap first pass). Both use **structured JSON output** (`output_config.format`) and **batch** `SCORE_BATCH` postings per call. Rubric is sent as a **cached** system prompt. No thinking param (constrained JSON output).
 - **Cost control:** free hard filters first; `MAX_LLM_CALLS` caps total API calls per run (shared across both stages); prefilter keeps most traffic off Opus.
 - **Precision over recall on the push:** only `≥ MIN_FIT_SCORE` (70) pings; `50–69` logged to `matches.json` as `"maybe"`.
+- **Deadlines & priority:** application deadlines are **not** in the feed snippets — `enrich_deadlines()` fetches each actionable match's job page and a Haiku call extracts an ISO date / `rolling` / unknown (own `DEADLINE_MAX_CALLS` budget so it never starves scoring). `assign_priority()` turns days-to-deadline into a label (🔴 DRINGEND ≤7d · 🟠 BALD ≤21d · 🟢 ZEIT/LAUFEND · ⚪ unbekannt · ⚫ abgelaufen); pushes are sorted most-urgent-first and the message shows a 🚦 priority line + ⏳ deadline line.
 - **Fail-open / fail-safe:** every source wrapped in try/except (dead source logged, skipped); prefilter failures pass the batch through to scoring; scoring failures skip the batch. Telegram-push failure leaves the posting *unseen* so it retries next run.
 - **Out-of-credits alert:** if the Anthropic API rejects calls for an exhausted balance (`NoCreditsError`, detected via `_is_credit_error`), `run()` pushes `NO_CREDITS_MESSAGE` to Telegram and exits code 3 — so a dead balance pings you to top up instead of failing silently.
 
 ## Key knobs (all env-overridable — see CONFIG block in `jobmonitor.py`)
 
-`MIN_FIT_SCORE`=70 · `MAYBE_MIN_SCORE`=50 · `PREFILTER_MIN`=40 · `MAX_LLM_CALLS`=40 · `SCORE_BATCH`=8 · `SCORING_MODEL` · `PREFILTER_MODEL` · `SEEN_FILE` · `MATCHES_FILE`.
+`MIN_FIT_SCORE`=70 · `MAYBE_MIN_SCORE`=50 · `PREFILTER_MIN`=40 · `MAX_LLM_CALLS`=40 · `SCORE_BATCH`=8 · `SCORING_MODEL` · `PREFILTER_MODEL` · `SEEN_FILE` · `MATCHES_FILE` · `DEADLINE_SOON_DAYS`=7 · `DEADLINE_WATCH_DAYS`=21 · `DEADLINE_MAX_CALLS`=6 · `DEADLINE_PAGE_CHARS`=6000.
 
 Secrets: `ANTHROPIC_API_KEY` (scoring), `TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID` (push — comma-separated for multiple recipients, e.g. `id1,id2`). Optional Tier C: `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` (+ `GOOGLE_CSE_PAGES`, `GOOGLE_CSE_DATERESTRICT`).
 
@@ -89,6 +91,7 @@ python jobmonitor.py --test     # push one sample match (no scrape/API)
 
 > Newest first. One line each: `YYYY-MM-DD — what changed (why)`.
 
+- 2026-06-18 — Deadline enrichment + priority: `enrich_deadlines()` fetches each actionable match's job page and extracts an application deadline (Haiku, own `DEADLINE_MAX_CALLS` budget); `assign_priority()` adds a 🚦 urgency label (🔴/🟠/🟢/⚪/⚫) from days-to-deadline; pushes sorted most-urgent-first; Telegram message gained 🚦 priority + ⏳ deadline lines; new `deadline`/`priority` Posting fields. Deadlines confirmed absent from all feed snippets (0/291).
 - 2026-06-18 — Workflow cron changed to `0 7,11,15,19 * * *` — daytime only (9am/1pm/5pm/9pm CEST).
 - 2026-06-18 — Multi-recipient Telegram: `TELEGRAM_CHAT_ID` now accepts comma-separated chat IDs (e.g. `7143335971,7647141150`) — both Rose and the monitor owner get every ping.
 - 2026-06-18 — Added EGU RSS + Drees & Sommer sources; widened greenjobs.de to 14-day window (256 items); bumped `MAX_ITEMS_PER_SOURCE` to 300; fixed `fetch_html` to skip mailto/tel/anchor hrefs; expanded domain hard-filter regex with German synonyms; moved to own git repo (jobmonitor-rose).
