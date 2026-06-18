@@ -127,34 +127,45 @@ use `--dry-run` to see it.
 
 | Source | Tier | Type | Status |
 |--------|------|------|--------|
-| greenjobs.de | B (climate/sustainability) | RSS (Atom) | ✅ verified working (~60 items) |
-| Transsolar careers | D (employer) | HTML scrape | ✅ returns job links |
-| Google Programmable Search | C (general) | JSON API | ⚙️ gated — no-op until you add keys |
+| academics.de | A (academic) | server-rendered search | ✅ verified (~80 items, German academic board) |
+| greenjobs.de | B (climate/sustainability) | RSS (Atom) | ✅ verified working (~260 items) |
+| EGU job board | B (geoscience) | RSS | ✅ verified (~10 items) |
+| Transsolar careers · Drees & Sommer | D (employer) | HTML scrape | ✅ returns job links |
+| Serper (Google SERP) | C (cross-board breadth) | JSON API | ⚙️ gated — no-op until you add `SERPER_API_KEY` |
 
 **`DISABLED_SOURCES`** (documented but not run) holds high-value academic
 targets — **EURAXESS, jobs.ac.uk, Fraunhofer IBP** — that a generic fetcher
-can't reach (403/404 bot-blocking, or JS-rendered SuccessFactors portals). Each
-has a note on how to wire it up properly (official data endpoint, or routing it
-through Programmable Search). Write a small `fetch_*` function returning
-`Posting` objects, then move its dict into `SOURCES`.
+can't reach (403/404 bot-blocking, or JS-rendered portals with no API, sitemap,
+or RSS). The robust way to cover them is **Tier C** below (search-engine index),
+not a direct fetcher.
 
-### Enabling Google Programmable Search (Tier C)
+### Enabling cross-board breadth — Serper.dev (Tier C)
 
-This is where niche-but-industry roles (consultancies, climate analytics)
-surface, and it's the cleanest way to cover EURAXESS / jobs.ac.uk indirectly
-(restrict the engine to those domains). Set both:
+The big international research boards (EURAXESS, jobs.ac.uk, Nature Careers,
+academics.com) are JS apps with no scrapeable feed. The way to reach **all of
+them at once** is a Google search API restricted to those domains. Google's own
+Custom Search JSON API is **closed to new customers** (full shutdown Jan 1 2027),
+so this project uses **[Serper.dev](https://serper.dev)** — an open Google-SERP
+API with a free tier (**2,500 searches/month, no credit card**).
+
+**Setup (~2 min):**
+1. Sign up at [serper.dev](https://serper.dev) (Google login; no card).
+2. Copy your API key from the dashboard.
+3. Add it as `SERPER_API_KEY` — in the local `.env` and in GitHub repo Secrets.
+
+That's it — the `serper` source activates automatically and starts pulling her
+niche across EURAXESS et al. Tune the domain list / keywords in the source's
+`queries` in `jobmonitor.py`.
 
 | Var | What it is |
 |-----|------------|
-| `GOOGLE_API_KEY` | [Custom Search JSON API](https://developers.google.com/custom-search/v1/introduction) key |
-| `GOOGLE_CSE_ID`  | Programmable Search Engine id (`cx`) |
-| `GOOGLE_CSE_PAGES` | optional, default `2` (×10 results) |
-| `GOOGLE_CSE_DATERESTRICT` | optional, default `d14` (last 14 days) |
+| `SERPER_API_KEY` | [serper.dev](https://serper.dev) API key (free tier) |
+| `SERPER_TBS` | optional, Google freshness, default `qdr:m` (past month) |
+| `SERPER_NUM` | optional, results per query, default `20` |
 
-> ⚠️ Google's Custom Search JSON API is **closed to new customers** and existing
-> customers must transition by **Jan 1, 2027**. If you can't get a key, the tool
-> runs fine without it (the source is a logged no-op) — or swap in another
-> search API by editing `fetch_google_cse`.
+> The legacy `fetch_google_cse` source (vars `GOOGLE_API_KEY` / `GOOGLE_CSE_ID`)
+> is kept for anyone who already has a Custom Search key, but it's a no-op
+> otherwise and can't be newly provisioned.
 
 ### Adding any source
 

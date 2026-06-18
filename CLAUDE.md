@@ -40,16 +40,17 @@ gather() ─▶ dedup() ─▶ drop seen ─▶ hard_filter() ─▶ prefilter()
 
 - **Models:** `SCORING_MODEL=claude-opus-4-8` (precise), `PREFILTER_MODEL=claude-haiku-4-5` (cheap first pass). Both use **structured JSON output** (`output_config.format`) and **batch** `SCORE_BATCH` postings per call. Rubric is sent as a **cached** system prompt. No thinking param (constrained JSON output).
 - **Cost control:** free hard filters first; `MAX_LLM_CALLS` caps total API calls per run (shared across both stages); prefilter keeps most traffic off Opus.
-- **Precision over recall on the push:** only `≥ MIN_FIT_SCORE` (70) pings; `50–69` logged to `matches.json` as `"maybe"`.
+- **Precision over recall on the push:** only `≥ MIN_FIT_SCORE` (50) pings; `40–49` logged to `matches.json` as `"maybe"`.
+- **Daily digest:** on the first daytime run (`DIGEST_HOUR_UTC`=7 → 9am CEST) `run()` pushes ONE overview (`format_digest`) of the top `DIGEST_TOP_N` (5) *below-threshold* postings, so she always sees the best available even on a zero-match day. Digest items are marked `seen` (with `"digest": True`) so the overview never repeats. `DIGEST_FORCE=1` forces it on any run (for testing).
 - **Deadlines & priority:** application deadlines are **not** in the feed snippets — `enrich_deadlines()` fetches each actionable match's job page and a Haiku call extracts an ISO date / `rolling` / unknown (own `DEADLINE_MAX_CALLS` budget so it never starves scoring). `assign_priority()` turns days-to-deadline into a label (🔴 DRINGEND ≤7d · 🟠 BALD ≤21d · 🟢 ZEIT/LAUFEND · ⚪ unbekannt · ⚫ abgelaufen); pushes are sorted most-urgent-first and the message shows a 🚦 priority line + ⏳ deadline line.
 - **Fail-open / fail-safe:** every source wrapped in try/except (dead source logged, skipped); prefilter failures pass the batch through to scoring; scoring failures skip the batch. Telegram-push failure leaves the posting *unseen* so it retries next run.
 - **Out-of-credits alert:** if the Anthropic API rejects calls for an exhausted balance (`NoCreditsError`, detected via `_is_credit_error`), `run()` pushes `NO_CREDITS_MESSAGE` to Telegram and exits code 3 — so a dead balance pings you to top up instead of failing silently.
 
 ## Key knobs (all env-overridable — see CONFIG block in `jobmonitor.py`)
 
-`MIN_FIT_SCORE`=70 · `MAYBE_MIN_SCORE`=50 · `PREFILTER_MIN`=40 · `MAX_LLM_CALLS`=40 · `SCORE_BATCH`=8 · `SCORING_MODEL` · `PREFILTER_MODEL` · `SEEN_FILE` · `MATCHES_FILE` · `DEADLINE_SOON_DAYS`=7 · `DEADLINE_WATCH_DAYS`=21 · `DEADLINE_MAX_CALLS`=6 · `DEADLINE_PAGE_CHARS`=6000.
+`MIN_FIT_SCORE`=50 · `MAYBE_MIN_SCORE`=40 · `PREFILTER_MIN`=35 · `MAX_LLM_CALLS`=70 · `SCORE_BATCH`=8 · `SCORING_MODEL` · `PREFILTER_MODEL` · `SEEN_FILE` · `MATCHES_FILE` · `DEADLINE_SOON_DAYS`=7 · `DEADLINE_WATCH_DAYS`=21 · `DEADLINE_MAX_CALLS`=6 · `DEADLINE_PAGE_CHARS`=6000 · `DIGEST_ENABLED`=1 · `DIGEST_HOUR_UTC`=7 · `DIGEST_TOP_N`=5 (`DIGEST_FORCE`=1 to force).
 
-Secrets: `ANTHROPIC_API_KEY` (scoring), `TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID` (push — comma-separated for multiple recipients, e.g. `id1,id2`). Optional Tier C: `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` (+ `GOOGLE_CSE_PAGES`, `GOOGLE_CSE_DATERESTRICT`).
+Secrets: `ANTHROPIC_API_KEY` (scoring), `TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID` (push — comma-separated for multiple recipients, e.g. `id1,id2`). Optional Tier C breadth: `SERPER_API_KEY` (+ `SERPER_TBS`=qdr:m, `SERPER_NUM`=20). Legacy Tier C: `GOOGLE_API_KEY` + `GOOGLE_CSE_ID`.
 
 **Secrets live in a gitignored `.env`** at the repo root — one file, auto-loaded by `_load_env_file()` at startup so `python jobmonitor.py` works with nothing exported. Real env vars / CI secrets always override it (loader never clobbers an already-set var). NEVER commit `.env`; for the GitHub Actions run, put the same values in repo Secrets. Live bot: "No Jobs for Rose" (`@NoJobsforRoseBot`).
 
@@ -59,13 +60,17 @@ Defined in `SOURCES`; each logs a `verified`/`UNVERIFIED` tag + item count per r
 
 | Source | Tier | Type | Status |
 |--------|------|------|--------|
+| academics.de | A | academics | ✅ verified (~49 items, German academic board; `/jobs?q=<term>` server-rendered, niche query terms) |
 | greenjobs.de | B | rss (Atom) | ✅ verified (~256 items, 14-day window) |
 | EGU job board | B | rss | ✅ verified (~10 items, European Geosciences Union) |
 | Transsolar careers | D | html | ✅ verified (job links) |
 | Drees & Sommer | D | html | ✅ verified (~18 items, Munich sustainability consultancy) |
-| Google Programmable Search | C | google_cse | ⚙️ gated (no-op without keys) |
+| Serper (Google SERP) | C | serper | ⚙️ gated (no-op without `SERPER_API_KEY`) — cross-board breadth |
+| Google Programmable Search | C | google_cse | ⚙️ legacy/gated (CSE API closed to new customers) |
 
-`DISABLED_SOURCES` (documented, not run): **EURAXESS** (403s automated clients), **jobs.ac.uk** (bot-blocks fetchers / 404), **Fraunhofer IBP** (JS SuccessFactors portal). Each needs a dedicated fetcher or routing through Programmable Search.
+`SERPER` is the active breadth path: an OPEN free Google-SERP API (serper.dev, 2,500/mo, no card) reaching the JS/bot-blocked boards via `site:`-restricted queries. Replaces Google CSE, which is **closed to new customers** (verified 2026-06-18; full shutdown 2027-01-01) — `fetch_google_cse` kept only for existing-key holders.
+
+`DISABLED_SOURCES` (documented, not run): **EURAXESS** (JS SPA — no API, no jobs sitemap, no RSS; reach via Serper instead), **jobs.ac.uk** (JS app / bot-blocks; reach via Serper), **Fraunhofer IBP** (JS SuccessFactors portal). academics.com / Nature Careers / jobvector / FindAPostDoc all likewise SPA-or-403 — Serper is the route to all of them.
 
 ## Run
 
@@ -91,6 +96,8 @@ python jobmonitor.py --test     # push one sample match (no scrape/API)
 
 > Newest first. One line each: `YYYY-MM-DD — what changed (why)`.
 
+- 2026-06-18 — Cross-board breadth via **Serper.dev** (`fetch_serper`, `type:"serper"`, `SERPER_API_KEY`/`SERPER_TBS`/`SERPER_NUM`): open free Google-SERP API (2,500/mo, no card) reaching EURAXESS/jobs.ac.uk/Nature/academics.com via `site:`-restricted niche queries. Chosen after verifying Google's Custom Search JSON API is **closed to new customers** (EURAXESS confirmed unscrapeable directly: SPA, no jobs sitemap/RSS/API; Brave API dropped its free tier). Also: Telegram push now **falls back to plain text on a 400** (malformed-Markdown safety net — fixes digest push failures); academics.de queries broadened 4→8 terms (~80 items).
+- 2026-06-18 — Volume fixes (Rose got 0 pings: best score was 48, threshold 70): (1) added **academics.de** source (`fetch_academics`, Tier A, German academic board, server-rendered `/jobs?q=<term>` with niche query terms — 49 items, hits her postdoc/professorship target group); (2) lowered thresholds `MIN_FIT_SCORE` 70→50, `MAYBE_MIN_SCORE` 50→40, `PREFILTER_MIN` 40→35; (3) added **daily digest** (`format_digest`, `DIGEST_*` config) — one overview of the top-5 below-threshold postings on the 9am-CEST run so she always sees the best available.
 - 2026-06-18 — Deadline enrichment + priority: `enrich_deadlines()` fetches each actionable match's job page and extracts an application deadline (Haiku, own `DEADLINE_MAX_CALLS` budget); `assign_priority()` adds a 🚦 urgency label (🔴/🟠/🟢/⚪/⚫) from days-to-deadline; pushes sorted most-urgent-first; Telegram message gained 🚦 priority + ⏳ deadline lines; new `deadline`/`priority` Posting fields. Deadlines confirmed absent from all feed snippets (0/291).
 - 2026-06-18 — Workflow cron changed to `0 7,11,15,19 * * *` — daytime only (9am/1pm/5pm/9pm CEST).
 - 2026-06-18 — Multi-recipient Telegram: `TELEGRAM_CHAT_ID` now accepts comma-separated chat IDs (e.g. `7143335971,7647141150`) — both Rose and the monitor owner get every ping.

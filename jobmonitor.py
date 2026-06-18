@@ -104,16 +104,23 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-MIN_FIT_SCORE   = _env_int("MIN_FIT_SCORE", 70)      # nur Treffer >= diesem Score pushen
-MAYBE_MIN_SCORE = _env_int("MAYBE_MIN_SCORE", 50)    # 50-69 -> als "maybe" in matches.json loggen
-PREFILTER_MIN   = _env_int("PREFILTER_MIN", 40)      # Haiku-Cutoff vor dem teuren Opus-Scoring
+MIN_FIT_SCORE   = _env_int("MIN_FIT_SCORE", 50)      # nur Treffer >= diesem Score pushen
+MAYBE_MIN_SCORE = _env_int("MAYBE_MIN_SCORE", 40)    # 40-49 -> als "maybe" in matches.json loggen
+PREFILTER_MIN   = _env_int("PREFILTER_MIN", 35)      # Haiku-Cutoff vor dem teuren Opus-Scoring
+
+# Daily digest: even on days with no >= MIN_FIT_SCORE match, push ONE overview of
+# the best available postings so she always sees what's out there. Sent only on
+# the run whose UTC hour == DIGEST_HOUR (07 UTC = 9am CEST, the first daytime run).
+DIGEST_ENABLED  = os.environ.get("DIGEST_ENABLED", "1").strip() not in ("0", "false", "")
+DIGEST_HOUR_UTC = _env_int("DIGEST_HOUR_UTC", 7)     # 9am CEST
+DIGEST_TOP_N    = _env_int("DIGEST_TOP_N", 5)
 
 LOCATIONS = [
     "München", "Munich", "Bayern", "Bavaria",
     "remote", "EU remote", "remote Germany", "hybrid Munich",
 ]
 
-MAX_LLM_CALLS   = _env_int("MAX_LLM_CALLS", 40)      # Kostendeckel pro Lauf (gesamt, beide Stufen)
+MAX_LLM_CALLS   = _env_int("MAX_LLM_CALLS", 70)      # Kostendeckel pro Lauf (gesamt, beide Stufen)
 SCORE_BATCH     = _env_int("SCORE_BATCH", 8)         # Postings pro LLM-Call (Batching senkt Kosten)
 
 # Deadline enrichment: fetch the job page for each strong/maybe match and pull
@@ -240,19 +247,61 @@ SOURCES: list[dict[str, Any]] = [
         "url": "https://www.egu.eu/jobs/rss/",
         "verified": True,
     },
-    # ---- Tier C: general search, queried with her keyword combos ----
-    # Google Programmable Search (Custom Search JSON API). No-op unless BOTH
-    # GOOGLE_API_KEY and GOOGLE_CSE_ID are set — see README. This is where the
-    # niche-but-industry roles (consultancies, climate analytics) surface.
+    # ---- Tier A: academic job board (her core target group) ----
+    # academics.de — Germany's main academic board. Server-rendered search;
+    # VERIFIED working (/jobs?q=<term> returns job-detail anchors in the HTML).
+    # Covers the postdoc/professorship/research roles the feeds above miss.
+    {
+        "name": "academics.de",
+        "tier": "A",
+        "type": "academics",
+        "queries": [
+            "Stadtklima", "thermischer Komfort", "Bauphysik", "Klimaanpassung",
+            "Mikroklima", "urban climate", "nachhaltiges Bauen", "Umweltmeteorologie",
+        ],
+        "verified": True,
+    },
+    # ---- Tier C: cross-board breadth via Serper.dev (Google SERP API) ----
+    # The active breadth source: an OPEN free-tier Google search API (2,500/mo, no
+    # card) reaching the big JS/bot-blocked boards via site:-restricted queries.
+    # No-op unless SERPER_API_KEY is set — see README "Tier C setup".
+    {
+        "name": "Serper (Google: EURAXESS/jobs.ac.uk/Nature/…)",
+        "tier": "C",
+        "type": "serper",
+        "queries": [
+            # International research boards × her niche × research roles.
+            '(site:euraxess.ec.europa.eu OR site:jobs.ac.uk OR site:academics.com '
+            'OR site:nature.com OR site:academicpositions.com) '
+            '("thermal comfort" OR "urban climate" OR "urban microclimate" OR '
+            'microclimate OR biometeorology OR "building physics" OR "urban heat") '
+            '(postdoc OR researcher OR scientist OR professor OR fellowship)',
+            # EURAXESS focus (the single most important board) + German terms.
+            'site:euraxess.ec.europa.eu ("urban climate" OR microclimate OR '
+            '"thermal comfort" OR "climate adaptation" OR "building physics" OR '
+            'Stadtklima OR Bauphysik OR Mikroklima)',
+        ],
+        "verified": False,
+    },
+    # ---- Tier C (legacy): Google Programmable Search ----
+    # Custom Search JSON API. No-op unless BOTH GOOGLE_API_KEY and GOOGLE_CSE_ID
+    # are set. This is the ONLY automated route to the big JS/bot-blocked research
+    # boards (EURAXESS, jobs.ac.uk, Nature Careers, academics.com, university
+    # career pages): configure those domains in the Programmable Search Engine
+    # control panel, and this query targets her niche + research-role keywords
+    # across all of them via Google's index. See README "Tier C setup".
     {
         "name": "Google Programmable Search",
         "tier": "C",
         "type": "google_cse",
         "query": (
             '("thermal comfort" OR biometeorology OR "urban climate" OR '
-            '"urban microclimate" OR "climate adaptation" OR Bauphysik OR '
-            '"sustainable architecture") (postdoc OR researcher OR scientist OR '
-            'consultant OR engineer) (München OR Munich OR remote OR EU)'
+            '"urban microclimate" OR microclimate OR "outdoor comfort" OR '
+            '"climate adaptation" OR "urban heat" OR Stadtklima OR Bauphysik OR '
+            '"building physics" OR "sustainable building" OR Klimaanpassung) '
+            '(postdoc OR "post-doc" OR researcher OR "research associate" OR '
+            'scientist OR "wissenschaftliche*r Mitarbeiter*in" OR professor OR '
+            'Juniorprofessur OR fellowship)'
         ),
         "verified": False,
     },
@@ -480,6 +529,56 @@ def fetch_html(src: dict[str, Any]) -> list[Posting]:
     return postings
 
 
+_ACADEMICS_HREF = re.compile(r"/jobs/[a-z0-9].*-\d{6,}", re.I)
+
+
+def fetch_academics(src: dict[str, Any]) -> list[Posting]:
+    """academics.de — Germany's main academic job board (postdocs, professorships,
+    research staff). Server-rendered search: GET /jobs?q=<term> returns job-detail
+    anchors right in the HTML. We run a few niche query terms and dedupe; the LLM
+    scoring does the precision (the on-site search is fuzzy/OR-based)."""
+    if BeautifulSoup is None:
+        log.warning("  bs4 not installed; cannot parse academics.de")
+        return []
+    base = "https://www.academics.de"
+    queries = src.get("queries", ["Stadtklima"])
+    seen_links: set[str] = set()
+    postings: list[Posting] = []
+    for term in queries:
+        try:
+            resp = _http_get(f"{base}/jobs?q={requests.compat.quote(term)}")  # type: ignore[attr-defined]
+        except Exception as exc:
+            log.warning("  academics.de query %r failed: %s", term, exc)
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if not _ACADEMICS_HREF.search(href):
+                continue
+            full = requests.compat.urljoin(base, href)  # type: ignore[attr-defined]
+            if full in seen_links:
+                continue
+            text = re.sub(r"\s+", " ", a.get_text(" ")).strip()
+            text = re.sub(r"^(Top Job|Premium|Anzeige)\s+", "", text, flags=re.I)
+            if len(text) < 10:
+                continue
+            seen_links.add(full)
+            postings.append(Posting(
+                title=text[:180],
+                employer="academics.de",
+                location=_guess_location(text),
+                url=full,
+                source=src["name"],
+                snippet=text[:400],   # title text carries institution + location
+                date="",
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                break
+        if len(postings) >= MAX_ITEMS_PER_SOURCE:
+            break
+    return postings
+
+
 def fetch_google_cse(src: dict[str, Any]) -> list[Posting]:
     """Tier C: Google Programmable Search (Custom Search JSON API).
 
@@ -534,6 +633,60 @@ def fetch_google_cse(src: dict[str, Any]) -> list[Posting]:
     return postings
 
 
+def fetch_serper(src: dict[str, Any]) -> list[Posting]:
+    """Tier C: cross-board breadth via Serper.dev (Google SERP API).
+
+    The replacement for Google's Custom Search JSON API (which is closed to new
+    customers since 2026). Serper has an open free tier (2,500 searches/month, no
+    credit card). No-op unless SERPER_API_KEY is set. Each query is a niche +
+    site:-restricted Google search across the big JS/bot-blocked research boards
+    (EURAXESS, jobs.ac.uk, Nature Careers, academics.com, university pages) — the
+    organic results are turned into Postings and the LLM does the precision.
+    """
+    api_key = os.environ.get("SERPER_API_KEY", "").strip()
+    if not api_key:
+        log.info("  Serper skipped (SERPER_API_KEY not set)")
+        return []
+    tbs = os.environ.get("SERPER_TBS", "qdr:m")   # Google freshness: past month
+    num = _env_int("SERPER_NUM", 20)
+    seen_links: set[str] = set()
+    postings: list[Posting] = []
+    for q in src.get("queries", []):
+        try:
+            resp = requests.post(
+                "https://google.serper.dev/search", timeout=HTTP_TIMEOUT,
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+                json={"q": q, "num": num, "tbs": tbs, "gl": "de", "hl": "de"},
+            )
+            if resp.status_code != 200:
+                log.warning("  Serper HTTP %s: %s", resp.status_code, resp.text[:160])
+                continue
+            organic = resp.json().get("organic", [])
+        except Exception as exc:
+            log.warning("  Serper query failed (%s)", exc)
+            continue
+        for it in organic:
+            link = (it.get("link") or "").strip()
+            title = (it.get("title") or "").strip()
+            if not link or not title or link in seen_links:
+                continue
+            seen_links.add(link)
+            snippet = _clean_text(it.get("snippet", ""))
+            domain = requests.compat.urlparse(link).netloc.replace("www.", "")  # type: ignore[attr-defined]
+            postings.append(Posting(
+                title=title[:200],
+                employer=domain or src["name"],
+                location=_guess_location(title + " " + snippet),
+                url=link,
+                source=src["name"],
+                snippet=snippet,
+                date=(it.get("date") or "").strip(),
+            ))
+        if len(postings) >= MAX_ITEMS_PER_SOURCE:
+            break
+    return postings
+
+
 def _guess_location(text: str) -> str:
     t = (text or "").lower()
     for loc in ["münchen", "munich", "bayern", "bavaria", "freiburg",
@@ -552,6 +705,10 @@ def gather() -> list[Posting]:
                 got = fetch_rss(src)
             elif src["type"] == "html":
                 got = fetch_html(src)
+            elif src["type"] == "academics":
+                got = fetch_academics(src)
+            elif src["type"] == "serper":
+                got = fetch_serper(src)
             elif src["type"] == "google_cse":
                 got = fetch_google_cse(src)
             else:
@@ -1071,6 +1228,22 @@ def format_message(p: Posting) -> str:
     return "\n".join(lines)
 
 
+def format_digest(postings: list[Posting]) -> str:
+    """One compact overview message of the best available postings (digest run)."""
+    lines = [
+        f"🗓 *Tages-Übersicht — Top {len(postings)} aktuelle Stellen*",
+        "_Das Beste, was die Quellen gerade hergeben (auch unter der Ping-Schwelle):_",
+        "",
+    ]
+    for i, p in enumerate(postings, 1):
+        prio = f"  {p.priority}" if p.priority else ""
+        lines.append(f"{i}. *{p.score}/100*{_md(prio)}")
+        lines.append(f"   {_md(p.title[:90])}")
+        lines.append(f"   📍 {_md(_loc_label(p))} · _{_md(p.source)}_")
+        lines.append(f"   🔗 {p.url}")
+    return "\n".join(lines)
+
+
 def _md(s: str) -> str:
     """Escape Telegram *legacy* Markdown special chars in free text."""
     return re.sub(r"([_*\[\]`])", r"\\\1", s or "")
@@ -1094,6 +1267,17 @@ def push_telegram(text: str) -> bool:
                 "parse_mode": "Markdown",
                 "disable_web_page_preview": "false",
             })
+            # Telegram rejects malformed legacy-Markdown (e.g. an unbalanced _ in a
+            # URL) with 400. Rather than lose the message, resend as plain text so
+            # the content always gets through (just without bold/italic).
+            if resp.status_code == 400:
+                log.warning("Telegram 400 for %s (%s) — retrying as plain text",
+                            chat_id, resp.text[:120])
+                resp = requests.post(url, timeout=HTTP_TIMEOUT, data={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "disable_web_page_preview": "false",
+                })
             if resp.status_code != 200:
                 log.error("Telegram push failed for %s — %s: %s",
                           chat_id, resp.status_code, resp.text[:200])
@@ -1191,9 +1375,18 @@ def run(dry_run: bool = False) -> int:
     log.info("Results: %d push (>=%d), %d maybe (%d-%d)",
              len(pushes), MIN_FIT_SCORE, len(maybes), MAYBE_MIN_SCORE, MIN_FIT_SCORE - 1)
 
-    # Enrich the actionable matches with a real application deadline (fetched
-    # from each job page) and assign an urgency-based priority label.
-    actionable = pushes + maybes
+    # Is this the once-a-day digest run? (first daytime cron, or forced for tests)
+    digest_run = DIGEST_ENABLED and (
+        os.environ.get("DIGEST_FORCE", "").strip() in ("1", "true")
+        or datetime.now(timezone.utc).hour == DIGEST_HOUR_UTC
+    )
+    # Digest = the best below-threshold postings she'd otherwise never see.
+    digest_extra = [p for p in scored if p.score < MIN_FIT_SCORE][:DIGEST_TOP_N] \
+        if digest_run else []
+
+    # Enrich the actionable matches (+ digest entries) with a real application
+    # deadline (fetched from each job page) and an urgency-based priority label.
+    actionable = pushes + maybes + [p for p in digest_extra if p not in maybes]
     if actionable:
         try:
             enrich_deadlines(client, actionable, LLMBudget(DEADLINE_MAX_CALLS))
@@ -1211,6 +1404,8 @@ def run(dry_run: bool = False) -> int:
         for p in (pushes + maybes)[:15]:
             log.info("  %3d  %-12s  %-22s  %s",
                      p.score, p.location_fit, p.priority or "—", p.title[:60])
+        if digest_run:
+            log.info("--dry-run: would send daily digest of %d postings", len(digest_extra))
         return 0
 
     # Push the strong matches (precision over recall on the ping).
@@ -1222,6 +1417,17 @@ def run(dry_run: bool = False) -> int:
             time.sleep(0.7)  # gentle rate-limit between messages
         else:
             log.warning("  push failed for %s — leaving unseen to retry next run", p.title[:60])
+
+    # Daily digest: one overview of the best below-threshold postings so she
+    # always sees what's out there. Mark them seen so the digest never repeats.
+    if digest_run and digest_extra:
+        if push_telegram(format_digest(digest_extra)):
+            for p in digest_extra:
+                seen[p.id] = {"title": p.title, "score": p.score, "ts": _now(),
+                              "pushed": False, "digest": True}
+            log.info("Sent daily digest of %d postings", len(digest_extra))
+        else:
+            log.warning("  digest push failed — leaving those unseen to retry")
 
     # Mark maybes as seen too (so we don't re-evaluate them), but log them as
     # "maybe" to matches.json so nothing good is silently lost.
