@@ -18,6 +18,11 @@ GitHub Actions cron. The core value is the **LLM fit-score**, not keyword match 
 the candidate sits in a narrow niche (outdoor thermal comfort / urban
 microclimate / sustainable building physics + AI).
 
+**Two parallel tracks** run each cron: the **niche** stream above, and
+**"No Easy Jobs for Rose"** — broader, decently-paid, quick-to-land jobs OUTSIDE
+her exact field but strictly in Munich or remote (its own rubric, sources, state
+files and Telegram chat; same bot).
+
 ## Layout
 
 | Path | Role |
@@ -26,23 +31,24 @@ microclimate / sustainable building physics + AI).
 | `.github/workflows/jobmonitor.yml` | Cron (every 4h) + manual dispatch; commits `seen.json`/`matches.json` back with rebase-retry. |
 | `requirements.txt` | `anthropic`, `requests`, `feedparser`, `beautifulsoup4`. |
 | `README.md` | User-facing setup (secrets, Telegram, sources, cost). |
-| `seen.json` | Notified/evaluated posting ids (sha1 of canonical URL + title). State. |
-| `matches.json` | Full audit backlog of everything scored (`push`/`maybe`/`low`). State. |
+| `seen.json` / `matches.json` | Niche-track state: seen ids + full audit backlog. |
+| `seen_easy.json` / `matches_easy.json` | Easy-track ("No Easy Jobs for Rose") state. |
 | `jobmonitor_PROMPT.md` | Original build spec. Reference only. |
 
 ## Architecture (pipeline per run)
 
 ```
-gather() ─▶ dedup() ─▶ drop seen ─▶ hard_filter() ─▶ prefilter()[Haiku] ─▶ score()[Opus]
-   ─▶ enrich_deadlines()[Haiku, fetches job page] ─▶ assign_priority()
-   ─▶ push score ≥ MIN_FIT_SCORE to Telegram (urgency-sorted) ─▶ persist seen.json / matches.json
+per track: gather(sources) ─▶ dedup() ─▶ drop seen ─▶ hard_filter() ─▶ prefilter()[Haiku] ─▶ score()[Opus]
+   ─▶ enrich_details()[Haiku, fetches job page → deadline + work_mode + language + location] ─▶ assign_priority()
+   ─▶ (easy track) Munich/remote location gate ─▶ push score ≥ track.min_score to Telegram (urgency-sorted) ─▶ persist <track> state
 ```
 
+- **Two tracks (`Track` dataclass, `run_track()`):** `run()` loops `TRACKS` = [`MAIN_TRACK`, `EASY_TRACK`]. `MAIN_TRACK` = niche (`CANDIDATE_RUBRIC`, `SOURCES`, `seen.json`/`matches.json`, `TELEGRAM_CHAT_ID`, requires domain signal). `EASY_TRACK` = "No Easy Jobs for Rose" (`EASY_RUBRIC`, `EASY_SOURCES`, `seen_easy.json`/`matches_easy.json`, `TELEGRAM_EASY_CHAT_ID`, no domain requirement, broader `_EASY_UNSUITABLE` blocklist, hard **Munich-or-remote location gate** applied after enrichment via `_location_ok`). Same bot token, different chat. Easy track is gated on `EASY_ENABLED` + its chat id (skipped on real runs if the chat id is unset, so no wasted API calls). Each track has its own LLM budget.
 - **Models:** `SCORING_MODEL=claude-opus-4-8` (precise), `PREFILTER_MODEL=claude-haiku-4-5` (cheap first pass). Both use **structured JSON output** (`output_config.format`) and **batch** `SCORE_BATCH` postings per call. Rubric is sent as a **cached** system prompt. No thinking param (constrained JSON output).
-- **Cost control:** free hard filters first; `MAX_LLM_CALLS` caps total API calls per run (shared across both stages); prefilter keeps most traffic off Opus.
-- **Precision over recall on the push:** only `≥ MIN_FIT_SCORE` (50) pings; `40–49` logged to `matches.json` as `"maybe"`.
-- **Daily digest:** on the first daytime run (`DIGEST_HOUR_UTC`=7 → 9am CEST) `run()` pushes ONE overview (`format_digest`) of the top `DIGEST_TOP_N` (5) *below-threshold* postings, so she always sees the best available even on a zero-match day. Digest items are marked `seen` (with `"digest": True`) so the overview never repeats. `DIGEST_FORCE=1` forces it on any run (for testing).
-- **Deadlines & priority:** application deadlines are **not** in the feed snippets — `enrich_deadlines()` fetches each actionable match's job page and a Haiku call extracts an ISO date / `rolling` / unknown (own `DEADLINE_MAX_CALLS` budget so it never starves scoring). `assign_priority()` turns days-to-deadline into a label (🔴 DRINGEND ≤7d · 🟠 BALD ≤21d · 🟢 ZEIT/LAUFEND · ⚪ unbekannt · ⚫ abgelaufen); pushes are sorted most-urgent-first and the message shows a 🚦 priority line + ⏳ deadline line.
+- **Cost control:** free hard filters first; `MAX_LLM_CALLS` (easy: `EASY_MAX_LLM_CALLS`) caps API calls per run **per track** (shared across both LLM stages within a track); prefilter keeps most traffic off Opus.
+- **Precision over recall on the push:** only `≥ track.min_score` (niche 50 / easy 60) pings; the maybe band (niche 40–49 / easy 45–59) is logged to the track's matches file as `"maybe"`.
+- **Daily digest:** on the first daytime run (`DIGEST_HOUR_UTC`=7 → 9am CEST) each track pushes ONE overview (`format_digest`) of its top `DIGEST_TOP_N` (5) *below-threshold* postings, so she always sees the best available even on a zero-match day. Digest items are marked `seen` (with `"digest": True`) so the overview never repeats. `DIGEST_FORCE=1` forces it on any run (for testing).
+- **Page enrichment & priority:** deadline, work-mode (remote/hybrid/on-site), work language and exact location are **not** in feed snippets — `enrich_details()` fetches each actionable match's job page and ONE Haiku call extracts ALL of them (own `DEADLINE_MAX_CALLS` budget; **page values overwrite the snippet-based guesses from scoring**). New `Posting.work_mode` field + a 🏠/🔀/🏢 badge in the message. `assign_priority()` turns days-to-deadline into a label (🔴 DRINGEND ≤7d · 🟠 BALD ≤21d · 🟢 ZEIT/LAUFEND · ⚪ unbekannt · ⚫ abgelaufen); pushes sorted most-urgent-first; message shows a 🚦 priority line + ⏳ deadline line.
 - **Fail-open / fail-safe:** every source wrapped in try/except (dead source logged, skipped); prefilter failures pass the batch through to scoring; scoring failures skip the batch. Telegram-push failure leaves the posting *unseen* so it retries next run.
 - **Out-of-credits alert:** if the Anthropic API rejects calls for an exhausted balance (`NoCreditsError`, detected via `_is_credit_error`), `run()` pushes `NO_CREDITS_MESSAGE` to Telegram and exits code 3 — so a dead balance pings you to top up instead of failing silently.
 
@@ -50,7 +56,9 @@ gather() ─▶ dedup() ─▶ drop seen ─▶ hard_filter() ─▶ prefilter()
 
 `MIN_FIT_SCORE`=50 · `MAYBE_MIN_SCORE`=40 · `PREFILTER_MIN`=35 · `MAX_LLM_CALLS`=70 · `SCORE_BATCH`=8 · `SCORING_MODEL` · `PREFILTER_MODEL` · `SEEN_FILE` · `MATCHES_FILE` · `DEADLINE_SOON_DAYS`=7 · `DEADLINE_WATCH_DAYS`=21 · `DEADLINE_MAX_CALLS`=6 · `DEADLINE_PAGE_CHARS`=6000 · `DIGEST_ENABLED`=1 · `DIGEST_HOUR_UTC`=7 · `DIGEST_TOP_N`=5 (`DIGEST_FORCE`=1 to force).
 
-Secrets: `ANTHROPIC_API_KEY` (scoring), `TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID` (push — comma-separated for multiple recipients, e.g. `id1,id2`). Optional Tier C breadth: `SERPER_API_KEY` (+ `SERPER_TBS`=qdr:m, `SERPER_NUM`=20). Legacy Tier C: `GOOGLE_API_KEY` + `GOOGLE_CSE_ID`.
+Easy track: `EASY_ENABLED`=1 · `EASY_MIN_SCORE`=60 · `EASY_MAYBE_MIN`=45 · `EASY_PREFILTER_MIN`=35 · `EASY_MAX_LLM_CALLS`=`MAX_LLM_CALLS` · `EASY_SEEN_FILE`=seen_easy.json · `EASY_MATCHES_FILE`=matches_easy.json.
+
+Secrets: `ANTHROPIC_API_KEY` (scoring), `TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID` (niche push — comma-separated for multiple recipients, e.g. `id1,id2`), `TELEGRAM_EASY_CHAT_ID` (easy track — same bot, different chat; track is skipped if unset). Tier C breadth (niche AND the entire easy track): `SERPER_API_KEY` (+ `SERPER_TBS`=qdr:m, `SERPER_NUM`=20). Legacy Tier C: `GOOGLE_API_KEY` + `GOOGLE_CSE_ID`.
 
 **Secrets live in a gitignored `.env`** at the repo root — one file, auto-loaded by `_load_env_file()` at startup so `python jobmonitor.py` works with nothing exported. Real env vars / CI secrets always override it (loader never clobbers an already-set var). NEVER commit `.env`; for the GitHub Actions run, put the same values in repo Secrets. Live bot: "No Jobs for Rose" (`@NoJobsforRoseBot`).
 
@@ -72,12 +80,15 @@ Defined in `SOURCES`; each logs a `verified`/`UNVERIFIED` tag + item count per r
 
 `DISABLED_SOURCES` (documented, not run): **EURAXESS** (JS SPA — no API, no jobs sitemap, no RSS; reach via Serper instead), **jobs.ac.uk** (JS app / bot-blocks; reach via Serper), **Fraunhofer IBP** (JS SuccessFactors portal). academics.com / Nature Careers / jobvector / FindAPostDoc all likewise SPA-or-403 — Serper is the route to all of them.
 
+`EASY_SOURCES` (easy track only): one Serper source with `junk_level:"light"` (keeps Indeed/StepStone/LinkedIn/Xing job boards, drops only social/video/paper noise) and ~10 plain-keyword Munich/remote queries (sustainability/ESG/data/GIS analyst, research associate, technical writer, project coordinator, English-speaking jobs, English teacher). **The easy track depends on `SERPER_API_KEY`** — it has no non-Serper source, so without the key it finds nothing.
+
 ## Run
 
 ```bash
-python jobmonitor.py            # full run
-python jobmonitor.py --dry-run  # gather+score, print top results, no push/persist
-python jobmonitor.py --test     # push one sample match (no scrape/API)
+python jobmonitor.py                 # full run, both tracks
+python jobmonitor.py --track easy     # only the "No Easy Jobs for Rose" track (main|easy|both)
+python jobmonitor.py --dry-run        # gather+score both tracks, print top results, no push/persist
+python jobmonitor.py --test           # push one sample match (no scrape/API)
 ```
 
 ## Conventions
@@ -96,6 +107,8 @@ python jobmonitor.py --test     # push one sample match (no scrape/API)
 
 > Newest first. One line each: `YYYY-MM-DD — what changed (why)`.
 
+- 2026-06-18 — **Second track "No Easy Jobs for Rose"** (`Track` dataclass, `EASY_TRACK`, `run_track()`): a parallel stream for broad, decently-paid, quick-to-land jobs OUTSIDE her niche, strictly Munich-or-remote. Own `EASY_RUBRIC`/`EASY_SCORING_INSTRUCTIONS`/`EASY_PREFILTER_INSTRUCTIONS`, `EASY_SOURCES` (Serper with `junk_level:"light"` keeping Indeed/StepStone/LinkedIn job boards), `_EASY_UNSUITABLE` hard filter (drops manual/service/low-wage, keeps office/analyst, no domain requirement), thresholds (`EASY_MIN_SCORE`=60/`EASY_MAYBE_MIN`=45/`EASY_PREFILTER_MIN`=35), budget (`EASY_MAX_LLM_CALLS`), state (`seen_easy.json`/`matches_easy.json`). Same bot, new chat `TELEGRAM_EASY_CHAT_ID` (track skipped if unset). Hard Munich/remote location gate (`_location_ok`) applied AFTER enrichment; location-gated would-be-pushes marked seen so they don't reprocess. New `--track {main,easy,both}` CLI flag. Workflow now also passes `SERPER_API_KEY` (was MISSING from CI — easy track + niche breadth both need it) and `TELEGRAM_EASY_CHAT_ID`, and commits the easy state files (untracked-safe staging).
+- 2026-06-18 — **Recognition fix** (language / deadline / location / work-type came out mostly "unknown" because the scorer only saw the short feed snippet): generalized deadline-only `enrich_deadlines()` → `enrich_details()`, which from the already-fetched job page now ALSO extracts work-mode, work language and candidate-relative location in the SAME Haiku call (no extra cost) and **overwrites the snippet guesses**. New `Posting.work_mode` (remote/hybrid/onsite) field + `_SCORE_SCHEMA`/`SCORING_INSTRUCTIONS` field + a 🏠/🔀/🏢 message badge (also in the digest).
 - 2026-06-18 — Cross-board breadth via **Serper.dev** (`fetch_serper`, `type:"serper"`, `SERPER_API_KEY`/`SERPER_TBS`/`SERPER_NUM`): open free Google-SERP API (2,500/mo, no card). **Free-tier constraint (verified live): `site:`, quotes and boolean `OR` are rejected** ("Query pattern not allowed for free accounts") — so queries are PLAIN keyword strings only; `_SERPER_JUNK_DOMAIN` drops social-media/paper-repo noise and the LLM scores the rest. EURAXESS/Nature/university boards still surface naturally (verified end-to-end: a live run pushed 5/5 strong matches incl. MSCA fellowships, urban-microclimate postdocs, urban-heat PhDs — up from 0–2 before). Chosen after verifying Google's Custom Search JSON API is **closed to new customers** (EURAXESS confirmed unscrapeable directly: SPA, no jobs sitemap/RSS/API; Brave API dropped its free tier). Also: Telegram push now **falls back to plain text on a 400** (malformed-Markdown safety net — fixes digest push failures); academics.de queries broadened 4→8 terms (~80 items).
 - 2026-06-18 — Volume fixes (Rose got 0 pings: best score was 48, threshold 70): (1) added **academics.de** source (`fetch_academics`, Tier A, German academic board, server-rendered `/jobs?q=<term>` with niche query terms — 49 items, hits her postdoc/professorship target group); (2) lowered thresholds `MIN_FIT_SCORE` 70→50, `MAYBE_MIN_SCORE` 50→40, `PREFILTER_MIN` 40→35; (3) added **daily digest** (`format_digest`, `DIGEST_*` config) — one overview of the top-5 below-threshold postings on the 9am-CEST run so she always sees the best available.
 - 2026-06-18 — Deadline enrichment + priority: `enrich_deadlines()` fetches each actionable match's job page and extracts an application deadline (Haiku, own `DEADLINE_MAX_CALLS` budget); `assign_priority()` adds a 🚦 urgency label (🔴/🟠/🟢/⚪/⚫) from days-to-deadline; pushes sorted most-urgent-first; Telegram message gained 🚦 priority + ⏳ deadline lines; new `deadline`/`priority` Posting fields. Deadlines confirmed absent from all feed snippets (0/291).

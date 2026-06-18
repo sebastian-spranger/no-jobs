@@ -140,6 +140,21 @@ CHECK_CRON      = "0 */4 * * *"                       # alle 4 Stunden (siehe wo
 SEEN_FILE       = os.environ.get("SEEN_FILE", "seen.json")
 MATCHES_FILE    = os.environ.get("MATCHES_FILE", "matches.json")
 
+# ── Second track: "No Easy Jobs for Rose" ─────────────────────────────────
+# A parallel stream for jobs OUTSIDE her research niche that she could land
+# quickly & easily and that pay decently — strictly Munich (on-site) OR fully
+# remote. Same Telegram bot, a DIFFERENT chat: set TELEGRAM_EASY_CHAT_ID.
+# The track is gated on that chat id (no chat -> not run on real runs) and on
+# its own state files so it never collides with the niche track. It has its own
+# rubric, sources, thresholds and LLM budget (see EASY_TRACK below).
+EASY_ENABLED       = os.environ.get("EASY_ENABLED", "1").strip() not in ("0", "false", "")
+EASY_MIN_SCORE     = _env_int("EASY_MIN_SCORE", 60)    # push threshold (easy stream)
+EASY_MAYBE_MIN     = _env_int("EASY_MAYBE_MIN", 45)    # 45-59 -> "maybe" in matches_easy.json
+EASY_PREFILTER_MIN = _env_int("EASY_PREFILTER_MIN", 35)
+EASY_MAX_LLM_CALLS = _env_int("EASY_MAX_LLM_CALLS", MAX_LLM_CALLS)  # own cost ceiling
+EASY_SEEN_FILE     = os.environ.get("EASY_SEEN_FILE", "seen_easy.json")
+EASY_MATCHES_FILE  = os.environ.get("EASY_MATCHES_FILE", "matches_easy.json")
+
 # Be a polite scraper.
 USER_AGENT = (
     "JobMonitorBot/1.0 (+https://github.com/; academic job fit monitor; "
@@ -208,7 +223,87 @@ For each posting return:
   reason         : ONE short line (max ~18 words) saying why it fits or doesn't
   location_fit   : one of "munich", "remote", "germany", "eu", "elsewhere", "unknown"
   language_flag  : one of "english", "german_required", "unknown"
+  work_mode      : one of "remote", "hybrid", "onsite", "unknown"
+                   (remote = fully remote/home-office; hybrid = partly on-site;
+                    onsite = fixed workplace). Infer from the text; "unknown" if unstated.
 """
+
+# Coarse first-pass instructions for the Haiku prefilter (the niche track).
+MAIN_PREFILTER_INSTRUCTIONS = (
+    "Quickly rate each posting's RELEVANCE to the candidate's domain on 0-100 "
+    "(domain overlap + seniority). This is a coarse first pass — be generous to "
+    "anything plausibly in-domain, harsh on clearly off-topic roles. "
+    "Return only id and score for each."
+)
+
+
+# ── "No Easy Jobs for Rose" — the easy / adjacent track rubric ─────────────
+# Same person, different lens: instead of her research niche, find decently-paid
+# jobs she could land QUICKLY and EASILY, strictly in Munich or fully remote.
+EASY_RUBRIC = """\
+CANDIDATE (same person, different lens): Dr. Sevil Zafarmandi — PhD, postdoctoral
+researcher. Fluent ENGLISH (research language), native Persian, LIMITED German.
+Transferable skills: research & analysis, statistics / data analysis, scientific &
+technical writing/editing, simulation & modelling tools, spatial / GIS-style analysis,
+sustainability & climate domain knowledge, teaching & presenting, project work.
+
+GOAL OF THIS CHANNEL ("easy track"): surface jobs she could realistically land
+QUICKLY and EASILY — roles where she is clearly qualified or OVERqualified, the barrier
+to entry is low, hiring is fast, and the pay is DECENT (a solid professional salary, not
+minimum wage, not unpaid). These need NOT be in her research niche. Think: a reliable,
+well-paid paycheck she can get soon.
+
+IN SCOPE (broad):
+- Adjacent professional roles leveraging her PhD/English: sustainability/ESG/climate
+  analyst or consultant, research assistant/associate (NOT PhD-student), data/GIS/
+  quantitative analyst, technical or scientific writer/editor, environmental consulting,
+  university/research-institute staff or coordinator, lab/project coordinator.
+- Broad decently-paid English-friendly office roles she could plausibly get fast even
+  outside her field: analysis, coordination, operations, program/project support,
+  knowledge work, customer success (English).
+- Flexible / quick-start work: English teaching/tutoring, part-time research, freelance
+  analysis, proofreading/editing in English.
+
+HARD CONSTRAINTS (this channel is strict):
+- LOCATION: MUNICH / Greater Munich / Bavaria on-site, OR FULLY REMOTE only. Anything
+  else (other German city on-site, EU on-site, hybrid tied to another city) is OUT.
+- LANGUAGE: must be doable with English / limited German. Roles requiring fluent or
+  native German score LOW.
+- PAY & LEVEL: decently-paid professional work only. Internships, Werkstudent,
+  Ausbildung, unpaid, or low-wage manual/service jobs are OUT.
+- EASE: favour low-barrier, fast-hiring roles; penalise ones needing niche
+  certifications/licences she lacks (e.g. German-bar lawyer, medical licence).
+"""
+
+EASY_SCORING_INSTRUCTIONS = """\
+You score how well a single job posting fits the "easy, quick-to-land, decently-paid,
+Munich-or-remote" goal above. Return a fit score 0-100.
+
+Weighting:
+- EASE OF LANDING (highest weight): is she clearly qualified or OVERqualified, with a low
+  barrier and fast hiring? -> high. Needs skills/licences she lacks, or is highly
+  competitive -> low.
+- LOCATION (hard gate): Munich/Bavaria on-site OR fully remote -> ok; anything else -> LOW.
+- LANGUAGE (hard gate): English-doable / limited-German ok -> ok; fluent/native German
+  required -> LOW.
+- PAY & LEVEL: decently-paid professional role -> ok; intern/Werkstudent/low-wage
+  manual/service -> LOW.
+
+Be calibrated: reserve 70+ for roles she could genuinely land quickly AND that pay
+decently AND are in Munich or remote. Optimize for precision — a high score should mean
+"she could realistically have this job soon."
+
+For each posting return the SAME fields as the other rubric:
+  score, reason (one short line), location_fit, language_flag, work_mode.
+"""
+
+EASY_PREFILTER_INSTRUCTIONS = (
+    "Quickly rate 0-100 how plausibly this is an EASY, decently-paid job she could land "
+    "fast in MUNICH or REMOTE (see the goal above). Be generous to plausible office / "
+    "adjacent / flexible roles in Munich or remote; be harsh on roles that are clearly the "
+    "wrong location (other city on-site), require fluent German, are unpaid / intern / "
+    "Werkstudent, or are low-wage manual/service work. Return only id and score."
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -359,6 +454,34 @@ DISABLED_SOURCES: list[dict[str, Any]] = [
     },
 ]
 
+# Sources for the "No Easy Jobs for Rose" (easy) track. Broad Munich/remote
+# breadth via Serper (Google SERP) with the LIGHTER junk filter
+# ("junk_level": "light") so the big job boards (Indeed, StepStone, LinkedIn,
+# Xing) survive — for general roles those boards are the target, not noise.
+# Plain-keyword queries only (Serper free-tier constraint). No-op without
+# SERPER_API_KEY, so the easy track needs that key set to find anything.
+EASY_SOURCES: list[dict[str, Any]] = [
+    {
+        "name": "Serper Easy (Munich/remote)",
+        "tier": "C",
+        "type": "serper",
+        "junk_level": "light",
+        "queries": [
+            "sustainability analyst Munich English",
+            "ESG consultant Munich English",
+            "research associate Munich English",
+            "data analyst remote Germany English",
+            "GIS analyst Germany remote English",
+            "technical writer remote Germany English",
+            "climate consultant Munich English",
+            "project coordinator Munich English",
+            "English speaking jobs Munich",
+            "English teacher Munich",
+        ],
+        "verified": True,
+    },
+]
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Logging
@@ -390,7 +513,8 @@ class Posting:
     reason: str = ""
     location_fit: str = "unknown"
     language_flag: str = "unknown"
-    # filled in by the deadline-enrichment stage (fetches the full job page)
+    work_mode: str = "unknown"   # remote | hybrid | onsite | unknown
+    # filled in by the page-enrichment stage (fetches the full job page)
     deadline: str = ""        # ISO "YYYY-MM-DD", or "rolling", or "" if unknown
     priority: str = ""        # human label, set in run() from deadline + score
 
@@ -643,6 +767,16 @@ _SERPER_JUNK_DOMAIN = re.compile(
     re.I,
 )
 
+# Lighter blocklist for the EASY track: drop pure social / video / podcast /
+# paper-repo noise but KEEP the big job boards (Indeed, StepStone, LinkedIn,
+# Glassdoor, Xing) — for broad Munich/remote roles those boards ARE the target.
+_SERPER_JUNK_LIGHT = re.compile(
+    r"(facebook|instagram|twitter|x\.com|youtube|tiktok|reddit|pinterest|"
+    r"redcircle|spotify|podcast|wikipedia|researchgate|biorxiv|medrxiv|"
+    r"arxiv\.org|ssrn|sciencedirect|springer|mdpi|semanticscholar)",
+    re.I,
+)
+
 
 def fetch_serper(src: dict[str, Any]) -> list[Posting]:
     """Tier C: cross-board breadth via Serper.dev (Google SERP API).
@@ -686,7 +820,8 @@ def fetch_serper(src: dict[str, Any]) -> list[Posting]:
             if not link or not title or link in seen_links:
                 continue
             domain = requests.compat.urlparse(link).netloc.replace("www.", "")  # type: ignore[attr-defined]
-            if _SERPER_JUNK_DOMAIN.search(domain):
+            junk = _SERPER_JUNK_LIGHT if src.get("junk_level") == "light" else _SERPER_JUNK_DOMAIN
+            if junk.search(domain):
                 continue  # social media / paper repos — not job postings
             seen_links.add(link)
             snippet = _clean_text(it.get("snippet", ""))
@@ -713,10 +848,11 @@ def _guess_location(text: str) -> str:
     return ""
 
 
-def gather() -> list[Posting]:
-    """Run every source; failures are logged and skipped, never fatal."""
+def gather(sources: list[dict[str, Any]] | None = None) -> list[Posting]:
+    """Run every source in `sources` (default SOURCES); failures logged & skipped."""
+    sources = sources if sources is not None else SOURCES
     all_postings: list[Posting] = []
-    for src in SOURCES:
+    for src in sources:
         try:
             if src["type"] == "rss":
                 got = fetch_rss(src)
@@ -783,9 +919,34 @@ _DOMAIN = re.compile(
     re.I,
 )
 
+# Easy track: drop clearly-unsuitable manual / service / care / low-wage roles
+# (a PhD-holder after decent office pay won't take these). Unlike the niche
+# _UNRELATED list it deliberately KEEPS office/analyst/consultant/coordination
+# roles so the easy-rubric LLM can judge them.
+_EASY_UNSUITABLE = re.compile(
+    r"\b(nurse|nursing|pflege|altenpflege|krankenpfleg|"
+    r"warehouse|lagerist|lagerarbeiter|lagerhelfer|kommissionier|produktionshelfer|"
+    r"driver|fahrer|lkw|kurier|paketbote|"
+    r"barista|waiter|waitress|kellner|koch|gastro|küche|spülkraft|"
+    r"cleaner|cleaning|reinigung|reinigungskraft|putzkraft|"
+    r"security|wachmann|sicherheitsdienst|"
+    r"bauarbeiter|maurer|dachdecker|installateur|schweißer|"
+    r"cashier|kassierer|verkäufer|verkaeufer|retail associate|shop assistant|"
+    r"friseur|hairdresser|kosmetik|"
+    r"nanny|babysit|au.?pair|erzieher|kinderbetreuung|"
+    r"aushilfe|minijob|450.?euro|520.?euro)\b",
+    re.I,
+)
 
-def hard_filter(postings: list[Posting]) -> tuple[list[Posting], int]:
-    """Return (kept, dropped_count). Drops obvious noise before LLM scoring."""
+
+def hard_filter(postings: list[Posting], *, require_domain: bool = True,
+                unrelated_re: "re.Pattern[str]" = _UNRELATED) -> tuple[list[Posting], int]:
+    """Return (kept, dropped_count). Drops obvious noise before LLM scoring.
+
+    Parametrized per track: the niche track requires a domain signal on snippet
+    postings (`require_domain=True`) and uses the niche `_UNRELATED` blocklist;
+    the easy track sets `require_domain=False` and a broader `unrelated_re`.
+    """
     kept: list[Posting] = []
     dropped = 0
     for p in postings:
@@ -793,16 +954,16 @@ def hard_filter(postings: list[Posting]) -> tuple[list[Posting], int]:
         if not p.title or not p.url:
             dropped += 1
             continue
-        if _UNRELATED.search(blob):
+        if unrelated_re and unrelated_re.search(blob):
             dropped += 1
             continue
         if _JUNIOR.search(blob) and not _JUNIOR_SENIOR_OVERRIDE.search(blob):
             dropped += 1
             continue
-        # Keep anything with a domain signal; also keep title-only postings
-        # (HTML sources) so the LLM can judge — but drop clearly off-topic
-        # ones that have a snippet yet no domain signal at all.
-        if p.snippet and not _DOMAIN.search(blob):
+        # Niche track only: keep anything with a domain signal; also keep
+        # title-only postings (HTML sources) so the LLM can judge — but drop
+        # clearly off-topic ones that have a snippet yet no domain signal at all.
+        if require_domain and p.snippet and not _DOMAIN.search(blob):
             dropped += 1
             continue
         kept.append(p)
@@ -907,8 +1068,12 @@ _SCORE_SCHEMA = {
                         "type": "string",
                         "enum": ["english", "german_required", "unknown"],
                     },
+                    "work_mode": {
+                        "type": "string",
+                        "enum": ["remote", "hybrid", "onsite", "unknown"],
+                    },
                 },
-                "required": ["id", "score", "reason", "location_fit", "language_flag"],
+                "required": ["id", "score", "reason", "location_fit", "language_flag", "work_mode"],
                 "additionalProperties": False,
             },
         }
@@ -955,16 +1120,11 @@ def _call_structured(client, model: str, system: str, user: str, schema: dict) -
     return json.loads(text)
 
 
-def prefilter(client, postings: list[Posting], budget: LLMBudget) -> list[Posting]:
-    """Cheap Haiku pass: coarse 0-100 relevance, keep >= PREFILTER_MIN."""
+def prefilter(client, postings: list[Posting], budget: LLMBudget, track: "Track") -> list[Posting]:
+    """Cheap Haiku pass: coarse 0-100 relevance, keep >= track.prefilter_min."""
     if not postings:
         return []
-    system = CANDIDATE_RUBRIC + "\n\n" + (
-        "Quickly rate each posting's RELEVANCE to the candidate's domain on 0-100 "
-        "(domain overlap + seniority). This is a coarse first pass — be generous to "
-        "anything plausibly in-domain, harsh on clearly off-topic roles. "
-        "Return only id and score for each."
-    )
+    system = track.rubric + "\n\n" + track.prefilter_instructions
     survivors: list[Posting] = []
     for batch in _chunk(postings, SCORE_BATCH):
         if not budget.allow():
@@ -979,7 +1139,7 @@ def prefilter(client, postings: list[Posting], budget: LLMBudget) -> list[Postin
             data = _call_structured(client, PREFILTER_MODEL, system, user, _PREFILTER_SCHEMA)
             scores = {r["id"]: int(r.get("score", 0)) for r in data.get("results", [])}
             for p in batch:
-                if scores.get(p.id, 0) >= PREFILTER_MIN:
+                if scores.get(p.id, 0) >= track.prefilter_min:
                     survivors.append(p)
         except NoCreditsError:
             raise  # bubble up so run() can send the Telegram alert
@@ -991,11 +1151,11 @@ def prefilter(client, postings: list[Posting], budget: LLMBudget) -> list[Postin
     return survivors
 
 
-def score(client, postings: list[Posting], budget: LLMBudget) -> list[Posting]:
-    """Precise Opus pass: fills score/reason/location_fit/language_flag in place."""
+def score(client, postings: list[Posting], budget: LLMBudget, track: "Track") -> list[Posting]:
+    """Precise Opus pass: fills score/reason/location_fit/language_flag/work_mode in place."""
     if not postings:
         return []
-    system = CANDIDATE_RUBRIC + "\n\n" + SCORING_INSTRUCTIONS
+    system = track.rubric + "\n\n" + track.scoring_instructions
     scored: list[Posting] = []
     for batch in _chunk(postings, SCORE_BATCH):
         if not budget.allow():
@@ -1015,6 +1175,7 @@ def score(client, postings: list[Posting], budget: LLMBudget) -> list[Posting]:
                 p.reason = (r.get("reason") or "").strip()
                 p.location_fit = r.get("location_fit", "unknown")
                 p.language_flag = r.get("language_flag", "unknown")
+                p.work_mode = r.get("work_mode", "unknown")
                 scored.append(p)
         except NoCreditsError:
             raise  # bubble up so run() can send the Telegram alert
@@ -1031,11 +1192,15 @@ def _chunk(seq: list[Any], n: int) -> Iterable[list[Any]]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 7b. Deadline enrichment (the deadline is NOT in the feed snippet — fetch the
-#     full job page and let the cheap model pull the application deadline).
+# 7b. Page enrichment — the feed snippet rarely states the application deadline,
+#     the work mode (remote/hybrid/on-site), the work language or the exact
+#     location. Those facts live in the full job page. So for each actionable
+#     match we fetch the page once and let the cheap model pull ALL of them in a
+#     single call (no extra cost over the old deadline-only pass). Page values
+#     are authoritative: they overwrite the snippet-based guesses from scoring.
 # ──────────────────────────────────────────────────────────────────────────
 
-_DEADLINE_SCHEMA = {
+_ENRICH_SCHEMA = {
     "type": "object",
     "properties": {
         "results": {
@@ -1047,8 +1212,20 @@ _DEADLINE_SCHEMA = {
                     # ISO date, or "rolling" for ongoing/no fixed date, or
                     # "unknown" if the page states no deadline.
                     "deadline": {"type": "string"},
+                    "work_mode": {
+                        "type": "string",
+                        "enum": ["remote", "hybrid", "onsite", "unknown"],
+                    },
+                    "language": {
+                        "type": "string",
+                        "enum": ["english", "german_required", "unknown"],
+                    },
+                    "location_fit": {
+                        "type": "string",
+                        "enum": ["munich", "remote", "germany", "eu", "elsewhere", "unknown"],
+                    },
                 },
-                "required": ["id", "deadline"],
+                "required": ["id", "deadline", "work_mode", "language", "location_fit"],
                 "additionalProperties": False,
             },
         }
@@ -1078,20 +1255,32 @@ def fetch_page_text(url: str) -> str:
     return text[:DEADLINE_PAGE_CHARS]
 
 
-def enrich_deadlines(client, postings: list[Posting], budget: LLMBudget) -> None:
-    """Fetch each posting's page and fill p.deadline in place (ISO/rolling/'')."""
+def enrich_details(client, postings: list[Posting], budget: LLMBudget) -> None:
+    """Fetch each posting's full page and fill in deadline + work_mode + language
+    + location_fit (the snippet rarely has them). Page values overwrite the
+    snippet-based guesses from scoring; fail-open and budget-capped."""
     if not postings:
         return
     today = _today_iso()
     system = (
-        "You extract the APPLICATION DEADLINE from a job posting's page text. "
-        f"Today is {today}. Return for each id exactly one of:\n"
-        '  - an ISO date "YYYY-MM-DD" if a clear application deadline / '
+        "You read a job posting's full page text and extract structured facts. "
+        f"Today is {today}. The candidate is based in MUNICH, Germany and can work "
+        "in Munich/Bavaria on-site OR fully remote. For each id return:\n"
+        '  deadline: an ISO date "YYYY-MM-DD" if a clear application deadline / '
         '"Bewerbungsfrist" / "Bewerbungsschluss" / "apply by" / "closing date" is stated '
-        "(resolve relative phrases like 'within 3 weeks' against today);\n"
-        '  - "rolling" if it says ongoing / "laufend" / "bis zur Besetzung" / until filled / no fixed date;\n'
-        '  - "unknown" if no deadline information is present.\n'
-        "Do not guess. Output only id + deadline."
+        "(resolve relative phrases like 'within 3 weeks' against today); "
+        '"rolling" if ongoing / "laufend" / "bis zur Besetzung" / until filled / no fixed date; '
+        '"unknown" if no deadline info is present.\n'
+        '  work_mode: "remote" if fully remote / home-office / ortsunabhängig; '
+        '"hybrid" if partly on-site and partly remote; "onsite" if it must be done at a fixed '
+        'workplace; "unknown" if unclear.\n'
+        '  language: "english" if the work language is English or the posting says English '
+        'is sufficient; "german_required" if fluent/native German is required; "unknown" if unclear.\n'
+        '  location_fit: relative to the Munich candidate — "munich" if the workplace is '
+        'Munich/Greater Munich/Bavaria; "remote" if fully remote (workable from Munich); '
+        '"germany" if elsewhere in Germany on-site; "eu" if elsewhere in the EU on-site; '
+        '"elsewhere" if outside the EU on-site; "unknown" if unclear.\n'
+        "Do not guess — use \"unknown\" when the page does not say. Output only these fields."
     )
     pages: list[dict[str, str]] = []
     for p in postings:
@@ -1103,14 +1292,14 @@ def enrich_deadlines(client, postings: list[Posting], budget: LLMBudget) -> None
     by_id = {p.id: p for p in postings}
     for batch in _chunk(pages, SCORE_BATCH):
         if not budget.allow():
-            log.warning("  deadline: LLM budget reached; %d postings left without a deadline",
+            log.warning("  enrich: LLM budget reached; %d postings left un-enriched",
                         len(pages) - pages.index(batch[0]))
             break
-        user = "Extract the application deadline for each posting:\n" + "\n".join(
+        user = "Extract the facts for each posting:\n" + "\n".join(
             json.dumps(b, ensure_ascii=False) for b in batch)
         try:
             budget.spend()
-            data = _call_structured(client, PREFILTER_MODEL, system, user, _DEADLINE_SCHEMA)
+            data = _call_structured(client, PREFILTER_MODEL, system, user, _ENRICH_SCHEMA)
             for r in data.get("results", []):
                 p = by_id.get(r.get("id", ""))
                 if not p:
@@ -1120,14 +1309,24 @@ def enrich_deadlines(client, postings: list[Posting], budget: LLMBudget) -> None
                     p.deadline = "rolling"
                 elif _ISO_DATE_RE.match(d):
                     p.deadline = d
-                # "unknown" / anything else -> leave "" (unknown)
+                # "unknown" / anything else -> leave deadline as-is (unknown)
+                wm = (r.get("work_mode") or "").strip().lower()
+                if wm in ("remote", "hybrid", "onsite"):
+                    p.work_mode = wm
+                lang = (r.get("language") or "").strip().lower()
+                if lang in ("english", "german_required"):
+                    p.language_flag = lang   # page is fuller than the snippet -> trust it
+                lf = (r.get("location_fit") or "").strip().lower()
+                if lf in ("munich", "remote", "germany", "eu", "elsewhere"):
+                    p.location_fit = lf
         except NoCreditsError:
             raise
         except Exception as exc:
-            log.warning("  deadline batch failed (%s); leaving those unknown", exc)
-    known = sum(1 for p in postings if p.deadline)
-    log.info("Deadline enrichment: %d/%d postings got a deadline (LLM calls used: %d/%d)",
-             known, len(postings), budget.used, budget.cap)
+            log.warning("  enrich batch failed (%s); leaving those unknown", exc)
+    got_dl = sum(1 for p in postings if p.deadline)
+    got_wm = sum(1 for p in postings if p.work_mode != "unknown")
+    log.info("Page enrichment: %d pages read; deadline %d/%d, work-mode %d/%d (LLM calls: %d/%d)",
+             len(pages), got_dl, len(postings), got_wm, len(postings), budget.used, budget.cap)
 
 
 def _today_iso() -> str:
@@ -1214,6 +1413,15 @@ def _lang_label(flag: str) -> str:
     }.get(flag, "Sprache unklar")
 
 
+def _work_mode_label(mode: str) -> str:
+    """Short badge for the work mode; '' (hidden) when unknown."""
+    return {
+        "remote": "🏠 Remote",
+        "hybrid": "🔀 Hybrid",
+        "onsite": "🏢 Vor Ort",
+    }.get(mode, "")
+
+
 def _loc_label(p: Posting) -> str:
     label = {
         "munich": "München/Bayern",
@@ -1225,16 +1433,23 @@ def _loc_label(p: Posting) -> str:
     return label
 
 
-def format_message(p: Posting) -> str:
-    """Telegram Markdown message in the spec's format."""
-    lines = [
-        f"💼 *{_md(p.title)}*  {_stars(p.score)}{p.score}/100",
-    ]
+def format_message(p: Posting, tag: str = "") -> str:
+    """Telegram Markdown message in the spec's format. `tag` prepends a header
+    line (used by the easy-jobs track so the second stream is unmistakable)."""
+    lines: list[str] = []
+    if tag:
+        lines.append(f"🟦 *{_md(tag)}*")
+    lines.append(f"💼 *{_md(p.title)}*  {_stars(p.score)}{p.score}/100")
     if p.priority:
         lines.append(f"🚦 *{_md(p.priority)}*")
+    locline = f"📍 {_md(_loc_label(p))}"
+    wm = _work_mode_label(p.work_mode)
+    if wm:
+        locline += f" · {wm}"
+    locline += f"   🗣 {_lang_label(p.language_flag)}"
     lines += [
         f"🏢 {_md(p.employer)} · _{_md(p.source)}_",
-        f"📍 {_md(_loc_label(p))}   🗣 {_lang_label(p.language_flag)}",
+        locline,
         _md(_deadline_label(p)),
     ]
     if p.reason:
@@ -1245,18 +1460,18 @@ def format_message(p: Posting) -> str:
     return "\n".join(lines)
 
 
-def format_digest(postings: list[Posting]) -> str:
+def format_digest(postings: list[Posting], title: str, subtitle: str) -> str:
     """One compact overview message of the best available postings (digest run)."""
-    lines = [
-        f"🗓 *Tages-Übersicht — Top {len(postings)} aktuelle Stellen*",
-        "_Das Beste, was die Quellen gerade hergeben (auch unter der Ping-Schwelle):_",
-        "",
-    ]
+    lines = [f"*{_md(title)}*", f"_{_md(subtitle)}_", ""]
     for i, p in enumerate(postings, 1):
         prio = f"  {p.priority}" if p.priority else ""
         lines.append(f"{i}. *{p.score}/100*{_md(prio)}")
         lines.append(f"   {_md(p.title[:90])}")
-        lines.append(f"   📍 {_md(_loc_label(p))} · _{_md(p.source)}_")
+        locbits = _loc_label(p)
+        wm = _work_mode_label(p.work_mode)
+        if wm:
+            locbits += f" · {wm}"
+        lines.append(f"   📍 {_md(locbits)} · _{_md(p.source)}_")
         lines.append(f"   🔗 {p.url}")
     return "\n".join(lines)
 
@@ -1266,14 +1481,17 @@ def _md(s: str) -> str:
     return re.sub(r"([_*\[\]`])", r"\\\1", s or "")
 
 
-def push_telegram(text: str) -> bool:
-    """Send to all chat IDs in TELEGRAM_CHAT_ID (comma-separated for multiple recipients)."""
+def push_telegram(text: str, chat_ids: list[str] | None = None) -> bool:
+    """Send `text` to each chat id. Defaults to TELEGRAM_CHAT_ID (the niche track
+    and the out-of-credits alert); the easy track passes its own chat ids. The
+    bot TOKEN is shared across both tracks."""
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
-    raw_ids = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not raw_ids:
-        log.error("TELEGRAM_TOKEN / TELEGRAM_CHAT_ID not set — cannot push.")
+    if chat_ids is None:
+        raw_ids = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        chat_ids = [c.strip() for c in raw_ids.split(",") if c.strip()]
+    if not token or not chat_ids:
+        log.error("TELEGRAM_TOKEN / chat id not set — cannot push.")
         return False
-    chat_ids = [c.strip() for c in raw_ids.split(",") if c.strip()]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     all_ok = True
     for chat_id in chat_ids:
@@ -1309,31 +1527,33 @@ def push_telegram(text: str) -> bool:
 # 9. State (seen.json / matches.json) — committed back by CI
 # ──────────────────────────────────────────────────────────────────────────
 
-def load_seen() -> dict[str, Any]:
-    if os.path.exists(SEEN_FILE):
+def load_seen(path: str | None = None) -> dict[str, Any]:
+    path = path or SEEN_FILE
+    if os.path.exists(path):
         try:
-            with open(SEEN_FILE, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as exc:
-            log.warning("Could not read %s (%s); starting fresh", SEEN_FILE, exc)
+            log.warning("Could not read %s (%s); starting fresh", path, exc)
     return {}
 
 
-def save_seen(seen: dict[str, Any]) -> None:
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
+def save_seen(seen: dict[str, Any], path: str | None = None) -> None:
+    with open(path or SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(seen, f, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def append_matches(records: list[dict[str, Any]]) -> None:
+def append_matches(records: list[dict[str, Any]], path: str | None = None) -> None:
+    path = path or MATCHES_FILE
     backlog: list[dict[str, Any]] = []
-    if os.path.exists(MATCHES_FILE):
+    if os.path.exists(path):
         try:
-            with open(MATCHES_FILE, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 backlog = json.load(f)
         except Exception:
             backlog = []
     backlog.extend(records)
-    with open(MATCHES_FILE, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(backlog, f, ensure_ascii=False, indent=2)
 
 
@@ -1342,93 +1562,222 @@ def _now() -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# 9b. Tracks — the niche stream and the "No Easy Jobs for Rose" easy stream
+# ──────────────────────────────────────────────────────────────────────────
+# A Track bundles everything that differs between the two parallel streams:
+# rubric/instructions, sources, hard-filter behaviour, thresholds, LLM budget,
+# state files, the Telegram chat env var, and the message/digest presentation.
+
+@dataclass
+class Track:
+    key: str                       # "main" | "easy"
+    label: str                     # human name for logs
+    rubric: str
+    scoring_instructions: str
+    prefilter_instructions: str
+    sources: list[dict[str, Any]]
+    seen_file: str
+    matches_file: str
+    chat_env: str                  # env var holding this track's chat id(s)
+    min_score: int
+    maybe_min: int
+    prefilter_min: int
+    max_llm_calls: int
+    require_domain: bool           # hard filter: niche -> True, easy -> False
+    unrelated_re: "re.Pattern[str]"
+    location_whitelist: set[str] | None   # easy -> {"munich","remote"}; niche -> None
+    tag: str                       # per-message header (easy only; "" hides it)
+    digest_title: str              # "{n}" placeholder for the count
+    digest_subtitle: str
+
+    def chat_ids(self) -> list[str]:
+        raw = os.environ.get(self.chat_env, "").strip()
+        return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+MAIN_TRACK = Track(
+    key="main",
+    label="Niche fit · No Jobs for Rose",
+    rubric=CANDIDATE_RUBRIC,
+    scoring_instructions=SCORING_INSTRUCTIONS,
+    prefilter_instructions=MAIN_PREFILTER_INSTRUCTIONS,
+    sources=SOURCES,
+    seen_file=SEEN_FILE,
+    matches_file=MATCHES_FILE,
+    chat_env="TELEGRAM_CHAT_ID",
+    min_score=MIN_FIT_SCORE,
+    maybe_min=MAYBE_MIN_SCORE,
+    prefilter_min=PREFILTER_MIN,
+    max_llm_calls=MAX_LLM_CALLS,
+    require_domain=True,
+    unrelated_re=_UNRELATED,
+    location_whitelist=None,
+    tag="",
+    digest_title="🗓 Tages-Übersicht — Top {n} aktuelle Stellen",
+    digest_subtitle="Das Beste, was die Quellen gerade hergeben (auch unter der Ping-Schwelle):",
+)
+
+EASY_TRACK = Track(
+    key="easy",
+    label="Easy / adjacent · No Easy Jobs for Rose",
+    rubric=EASY_RUBRIC,
+    scoring_instructions=EASY_SCORING_INSTRUCTIONS,
+    prefilter_instructions=EASY_PREFILTER_INSTRUCTIONS,
+    sources=EASY_SOURCES,
+    seen_file=EASY_SEEN_FILE,
+    matches_file=EASY_MATCHES_FILE,
+    chat_env="TELEGRAM_EASY_CHAT_ID",
+    min_score=EASY_MIN_SCORE,
+    maybe_min=EASY_MAYBE_MIN,
+    prefilter_min=EASY_PREFILTER_MIN,
+    max_llm_calls=EASY_MAX_LLM_CALLS,
+    require_domain=False,
+    unrelated_re=_EASY_UNSUITABLE,
+    location_whitelist={"munich", "remote"},
+    tag="Easy-Job · schnell & solide bezahlt · München/Remote",
+    digest_title="🟦 Easy-Jobs — Top {n} schnelle, solide Stellen (München/Remote)",
+    digest_subtitle="Schnell erreichbare, anständig bezahlte Jobs in München oder remote:",
+)
+
+# Tracks in run order. The easy track is gated at runtime on EASY_ENABLED and on
+# its chat id being set (see run()).
+TRACKS: list[Track] = [MAIN_TRACK, EASY_TRACK]
+
+
+def _location_ok(p: Posting, whitelist: set[str]) -> bool:
+    """Easy track gate: keep only Munich-area / remote roles. A fully-remote
+    work_mode qualifies regardless of where the employer sits (she works from Munich)."""
+    if p.work_mode == "remote":
+        return True
+    return p.location_fit in whitelist
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # 10. Orchestration
 # ──────────────────────────────────────────────────────────────────────────
 
-def run(dry_run: bool = False) -> int:
+def run(dry_run: bool = False, only_track: str | None = None) -> int:
+    """Run all enabled tracks. The Anthropic client and the once-a-day digest
+    check are shared; each track keeps its own sources, LLM budget and state.
+    Returns 0 on success, 2 if the API key/client is missing, 3 if out of credits."""
     log.info("=== Job-Monitor run @ %s ===", _now())
 
-    seen = load_seen()
-    log.info("Loaded %d seen ids", len(seen))
-
-    # gather -> dedup -> drop seen -> hard filter
-    raw = gather()
-    log.info("Gathered %d raw postings from %d sources", len(raw), len(SOURCES))
-
-    unique = dedup(raw)
-    fresh = [p for p in unique if p.id not in seen]
-    log.info("After dedup: %d ; after dropping seen: %d", len(unique), len(fresh))
-
-    kept, dropped = hard_filter(fresh)
-    log.info("Hard filters: kept %d, dropped %d", len(kept), dropped)
-
-    if not kept:
-        log.info("Nothing to score. Done.")
-        return 0
-
-    # LLM: prefilter (Haiku) -> score (Opus), under a shared call budget
     if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
         log.error("ANTHROPIC_API_KEY not set — cannot score. Aborting (no state change).")
         return 2
-
-    budget = LLMBudget(MAX_LLM_CALLS)
     try:
         client = _anthropic_client()
     except Exception as exc:
         log.error("Could not init Anthropic client: %s", exc)
         return 2
 
-    try:
-        survivors = prefilter(client, kept, budget)
-        scored = score(client, survivors, budget)
-    except NoCreditsError as exc:
-        log.error("Anthropic API out of credits (%s) — alerting via Telegram", exc)
-        push_telegram(NO_CREDITS_MESSAGE)
-        return 3
-    scored.sort(key=lambda p: p.score, reverse=True)
-
-    pushes = [p for p in scored if p.score >= MIN_FIT_SCORE]
-    maybes = [p for p in scored if MAYBE_MIN_SCORE <= p.score < MIN_FIT_SCORE]
-    log.info("Results: %d push (>=%d), %d maybe (%d-%d)",
-             len(pushes), MIN_FIT_SCORE, len(maybes), MAYBE_MIN_SCORE, MIN_FIT_SCORE - 1)
-
     # Is this the once-a-day digest run? (first daytime cron, or forced for tests)
     digest_run = DIGEST_ENABLED and (
         os.environ.get("DIGEST_FORCE", "").strip() in ("1", "true")
         or datetime.now(timezone.utc).hour == DIGEST_HOUR_UTC
     )
+
+    rc = 0
+    for track in TRACKS:
+        if only_track and track.key != only_track:
+            continue
+        if track.key == "easy" and not EASY_ENABLED:
+            log.info("Track 'easy' disabled (EASY_ENABLED=0) — skipping.")
+            continue
+        # The easy track needs its own chat id; without it (and not a dry-run)
+        # there's nowhere to push, so don't spend API calls scoring it.
+        if track.key != "main" and not dry_run and not track.chat_ids():
+            log.info("Track '%s' skipped: %s not set (no chat to push to).",
+                     track.key, track.chat_env)
+            continue
+        try:
+            rc = run_track(client, track, dry_run=dry_run, digest_run=digest_run) or rc
+        except NoCreditsError as exc:
+            log.error("Anthropic API out of credits (%s) — alerting via Telegram", exc)
+            push_telegram(NO_CREDITS_MESSAGE)  # always to the main chat
+            return 3
+    return rc
+
+
+def run_track(client, track: Track, dry_run: bool = False, digest_run: bool = False) -> int:
+    """One track end-to-end: gather -> filter -> prefilter -> score -> enrich ->
+    push -> persist, using the track's own rubric, sources, thresholds and state."""
+    log.info("--- Track '%s': %s ---", track.key, track.label)
+
+    seen = load_seen(track.seen_file)
+    log.info("Loaded %d seen ids (%s)", len(seen), track.seen_file)
+
+    # gather -> dedup -> drop seen -> hard filter
+    raw = gather(track.sources)
+    log.info("Gathered %d raw postings from %d sources", len(raw), len(track.sources))
+
+    unique = dedup(raw)
+    fresh = [p for p in unique if p.id not in seen]
+    log.info("After dedup: %d ; after dropping seen: %d", len(unique), len(fresh))
+
+    kept, dropped = hard_filter(fresh, require_domain=track.require_domain,
+                                unrelated_re=track.unrelated_re)
+    log.info("Hard filters: kept %d, dropped %d", len(kept), dropped)
+
+    if not kept:
+        log.info("Nothing to score for track '%s'. Done.", track.key)
+        return 0
+
+    # LLM: prefilter (Haiku) -> score (Opus), under this track's own budget.
+    budget = LLMBudget(track.max_llm_calls)
+    survivors = prefilter(client, kept, budget, track)
+    scored = score(client, survivors, budget, track)
+    scored.sort(key=lambda p: p.score, reverse=True)
+
+    pushes = [p for p in scored if p.score >= track.min_score]
+    maybes = [p for p in scored if track.maybe_min <= p.score < track.min_score]
+    log.info("Results: %d push (>=%d), %d maybe (%d-%d)",
+             len(pushes), track.min_score, len(maybes), track.maybe_min, track.min_score - 1)
+
     # Digest = the best below-threshold postings she'd otherwise never see.
-    digest_extra = [p for p in scored if p.score < MIN_FIT_SCORE][:DIGEST_TOP_N] \
+    digest_extra = [p for p in scored if p.score < track.min_score][:DIGEST_TOP_N] \
         if digest_run else []
 
-    # Enrich the actionable matches (+ digest entries) with a real application
-    # deadline (fetched from each job page) and an urgency-based priority label.
+    # Enrich the actionable matches (+ digest entries) with deadline + work_mode
+    # + language + location (fetched from each job page) and an urgency label.
     actionable = pushes + maybes + [p for p in digest_extra if p not in maybes]
     if actionable:
-        try:
-            enrich_deadlines(client, actionable, LLMBudget(DEADLINE_MAX_CALLS))
-        except NoCreditsError as exc:
-            log.error("Out of credits during deadline enrichment (%s) — alerting", exc)
-            push_telegram(NO_CREDITS_MESSAGE)
-            return 3
+        enrich_details(client, actionable, LLMBudget(DEADLINE_MAX_CALLS))
         for p in actionable:
             assign_priority(p)
+
+    # Easy track is strict on location: only Munich-area or remote may ping or
+    # appear in the digest. Applied AFTER enrichment so we use the accurate
+    # work_mode / location_fit from the page, not the snippet guess.
+    gate_dropped: list[Posting] = []
+    if track.location_whitelist is not None:
+        ok = [p for p in pushes if _location_ok(p, track.location_whitelist)]
+        gate_dropped = [p for p in pushes if p not in ok]
+        pushes = ok
+        digest_extra = [p for p in digest_extra if _location_ok(p, track.location_whitelist)]
+        if gate_dropped:
+            log.info("Location gate (Munich/remote): dropped %d non-local push(es)",
+                     len(gate_dropped))
+
     # Most urgent first within the push (deadline buckets, then score).
     pushes.sort(key=_priority_rank)
 
     if dry_run:
-        log.info("--dry-run: not pushing or persisting. Top results:")
+        log.info("--dry-run [%s]: not pushing or persisting. Top results:", track.key)
         for p in (pushes + maybes)[:15]:
-            log.info("  %3d  %-12s  %-22s  %s",
-                     p.score, p.location_fit, p.priority or "—", p.title[:60])
+            log.info("  %3d  %-9s  %-7s  %-20s  %s",
+                     p.score, p.location_fit, p.work_mode, p.priority or "—", p.title[:55])
         if digest_run:
-            log.info("--dry-run: would send daily digest of %d postings", len(digest_extra))
+            log.info("--dry-run [%s]: would send daily digest of %d postings",
+                     track.key, len(digest_extra))
         return 0
+
+    chat_ids = track.chat_ids()
 
     # Push the strong matches (precision over recall on the ping).
     pushed_ok = 0
     for p in pushes:
-        if push_telegram(format_message(p)):
+        if push_telegram(format_message(p, tag=track.tag), chat_ids):
             pushed_ok += 1
             seen[p.id] = {"title": p.title, "score": p.score, "ts": _now(), "pushed": True}
             time.sleep(0.7)  # gentle rate-limit between messages
@@ -1438,7 +1787,8 @@ def run(dry_run: bool = False) -> int:
     # Daily digest: one overview of the best below-threshold postings so she
     # always sees what's out there. Mark them seen so the digest never repeats.
     if digest_run and digest_extra:
-        if push_telegram(format_digest(digest_extra)):
+        title = track.digest_title.format(n=len(digest_extra))
+        if push_telegram(format_digest(digest_extra, title, track.digest_subtitle), chat_ids):
             for p in digest_extra:
                 seen[p.id] = {"title": p.title, "score": p.score, "ts": _now(),
                               "pushed": False, "digest": True}
@@ -1446,22 +1796,27 @@ def run(dry_run: bool = False) -> int:
         else:
             log.warning("  digest push failed — leaving those unseen to retry")
 
-    # Mark maybes as seen too (so we don't re-evaluate them), but log them as
-    # "maybe" to matches.json so nothing good is silently lost.
+    # Mark maybes as seen too (so we don't re-evaluate them), logged as "maybe".
     for p in maybes:
         seen[p.id] = {"title": p.title, "score": p.score, "ts": _now(), "pushed": False}
+    # Strong matches the location gate rejected: mark seen so we don't re-fetch
+    # and re-enrich them every run (they can never ping on this track).
+    for p in gate_dropped:
+        seen[p.id] = {"title": p.title, "score": p.score, "ts": _now(),
+                      "pushed": False, "gated": "location"}
 
     # Append everything scored to the audit backlog.
     records = [
-        {**asdict(p), "id": p.id, "kind": "push" if p.score >= MIN_FIT_SCORE
-         else ("maybe" if p.score >= MAYBE_MIN_SCORE else "low"), "ts": _now()}
+        {**asdict(p), "id": p.id, "kind": "push" if p.score >= track.min_score
+         else ("maybe" if p.score >= track.maybe_min else "low"), "ts": _now()}
         for p in scored
     ]
-    append_matches(records)
-    save_seen(seen)
+    append_matches(records, track.matches_file)
+    save_seen(seen, track.seen_file)
 
-    log.info("Done. Pushed %d/%d strong matches; %d maybes logged; seen=%d; LLM calls=%d/%d",
-             pushed_ok, len(pushes), len(maybes), len(seen), budget.used, budget.cap)
+    log.info("Track '%s' done. Pushed %d/%d; %d maybes; seen=%d; LLM calls=%d/%d",
+             track.key, pushed_ok, len(pushes), len(maybes), len(seen),
+             budget.used, budget.cap)
     return 0
 
 
@@ -1481,6 +1836,7 @@ def run_test() -> int:
         reason="Deep niche match: outdoor thermal comfort + urban microclimate in Munich.",
         location_fit="munich",
         language_flag="english",
+        work_mode="hybrid",    # sample: shows the new 🔀 Hybrid badge
         deadline=_in_days(5),  # sample: deadline 5 days out -> 🔴 DRINGEND
     )
     assign_priority(sample)
@@ -1498,11 +1854,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="push one sample match end-to-end (no scrape/LLM)")
     parser.add_argument("--dry-run", action="store_true",
                         help="gather + score but do not push or persist state")
+    parser.add_argument("--track", choices=["main", "easy", "both"], default="both",
+                        help="which track(s) to run: niche 'main', 'easy', or 'both' (default)")
     args = parser.parse_args(argv)
 
     if args.test:
         return run_test()
-    return run(dry_run=args.dry_run)
+    only = None if args.track == "both" else args.track
+    return run(dry_run=args.dry_run, only_track=only)
 
 
 if __name__ == "__main__":

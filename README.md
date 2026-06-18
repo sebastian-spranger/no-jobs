@@ -30,8 +30,13 @@ gather all sources  ─▶  normalize to Posting  ─▶  dedup (url + employer/
   Both stages use **structured JSON output** and **batch** several postings per
   call to keep cost low. The candidate rubric is sent as a cached system prompt.
 - **Precision over recall on the push**: only `score ≥ MIN_FIT_SCORE` (default
-  **70**) is pushed, so every Telegram ping is trustworthy. Near-misses
-  (`50–69`) are logged to `matches.json` as `"maybe"` so nothing good is lost.
+  **50**) is pushed, so every Telegram ping is trustworthy. Near-misses
+  (`40–49`) are logged to `matches.json` as `"maybe"` so nothing good is lost.
+- **Two tracks**: a **niche** stream (her research field) and
+  **"No Easy Jobs for Rose"** — broader, decently-paid, quick-to-land jobs
+  strictly in **Munich or remote**. Same bot, different chat
+  (`TELEGRAM_EASY_CHAT_ID`); own rubric, sources and state
+  (`seen_easy.json` / `matches_easy.json`). Choose with `--track main|easy|both`.
 - **Defensive sourcing**: every source is wrapped in `try/except`; a dead source
   is logged and skipped, never crashes the run.
 
@@ -48,7 +53,9 @@ Actions → New repository secret`), or export them locally:
 |---------------------|------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key (Claude). Required for scoring. |
 | `TELEGRAM_TOKEN`    | Telegram bot token from [@BotFather](https://t.me/BotFather). |
-| `TELEGRAM_CHAT_ID`  | Chat/channel id to send matches to (see below). |
+| `TELEGRAM_CHAT_ID`  | Chat/channel id for the **niche** track (see below). |
+| `TELEGRAM_EASY_CHAT_ID` | Chat id for the **"No Easy Jobs for Rose"** track — same bot, different chat. Unset → that track is skipped. |
+| `SERPER_API_KEY`    | [serper.dev](https://serper.dev) key (free). Powers cross-board breadth **and the entire easy track** — no key → the easy track finds nothing. |
 
 ### 2. Telegram bot + chat id
 
@@ -60,6 +67,24 @@ Actions → New repository secret`), or export them locally:
    ```
    Look for `"chat":{"id":...}` → that number is `TELEGRAM_CHAT_ID`.
    (For a group, the id is negative; add the bot to the group first.)
+
+### 2b. Second channel — "No Easy Jobs for Rose"
+
+The easy track uses the **same bot** but posts to a **different chat**, so the two
+streams stay cleanly separated. Easiest setup:
+
+1. In Telegram, create a **channel** (or group) called *No Easy Jobs for Rose* and
+   have Rose join it.
+2. Add your bot to it **as an admin** (channels require admin to post).
+3. Post any message there, then read the chat id:
+   ```bash
+   curl "https://api.telegram.org/bot<TELEGRAM_TOKEN>/getUpdates"
+   ```
+   The channel/group id is negative (e.g. `-1001234567890`) → set it as
+   `TELEGRAM_EASY_CHAT_ID`.
+
+If `TELEGRAM_EASY_CHAT_ID` is unset the easy track is simply skipped (the niche
+track runs as before). The easy track also needs `SERPER_API_KEY` to find anything.
 
 ### 3. Verify end-to-end
 
@@ -82,22 +107,25 @@ loop to survive push races. Just push this repo to GitHub with the secrets set.
 ## Running locally
 
 ```bash
-python jobmonitor.py             # full run: scrape → score → push → persist
-python jobmonitor.py --dry-run   # scrape + score, print top results, no push/persist
-python jobmonitor.py --test      # push one sample match (sanity-check Telegram)
+python jobmonitor.py              # full run, both tracks: scrape → score → push → persist
+python jobmonitor.py --track easy # only the "No Easy Jobs for Rose" track (main|easy|both)
+python jobmonitor.py --dry-run    # scrape + score, print top results, no push/persist
+python jobmonitor.py --test       # push one sample match (sanity-check Telegram)
 ```
 
 Environment overrides (no code changes needed):
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `MIN_FIT_SCORE`   | `70` | push threshold |
-| `MAYBE_MIN_SCORE` | `50` | log-as-"maybe" floor |
-| `PREFILTER_MIN`   | `40` | Haiku cutoff before Opus scoring |
-| `MAX_LLM_CALLS`   | `40` | hard cap on API calls per run (cost ceiling) |
+| `MIN_FIT_SCORE`   | `50` | niche push threshold |
+| `MAYBE_MIN_SCORE` | `40` | log-as-"maybe" floor |
+| `PREFILTER_MIN`   | `35` | Haiku cutoff before Opus scoring |
+| `MAX_LLM_CALLS`   | `70` | hard cap on API calls per run, **per track** (cost ceiling) |
 | `SCORE_BATCH`     | `8`  | postings scored per LLM call |
 | `SCORING_MODEL`   | `claude-opus-4-8` | precise scorer |
 | `PREFILTER_MODEL` | `claude-haiku-4-5` | cheap first pass |
+| `EASY_MIN_SCORE` / `EASY_MAYBE_MIN` | `60` / `45` | easy-track push / maybe thresholds |
+| `EASY_ENABLED`    | `1`  | set `0` to disable the easy track entirely |
 
 ---
 
@@ -105,15 +133,19 @@ Environment overrides (no code changes needed):
 
 ```
 💼 Postdoctoral Researcher — Urban Microclimate & Thermal Comfort  ⭐⭐⭐⭐⭐92/100
+🚦 🔴 DRINGEND · 5 Tage
 🏢 TU München · School of Engineering and Design · EURAXESS
-📍 München/Bayern   🗣 English
+📍 München/Bayern · 🔀 Hybrid   🗣 English
+⏳ Bewerbungsfrist: 2026-06-23 (in 5 Tagen)
 🎯 Deep niche match: outdoor thermal comfort + urban microclimate in Munich.
 🗓 2026-06-17
 🔗 https://…
 ```
 
-Stars scale with the score. Messages are rate-limited (~0.7s apart) so a burst
-of matches doesn't trip Telegram's limits.
+Stars scale with the score; the 🚦 line is deadline urgency, 📍 carries the
+work mode (🏠 Remote · 🔀 Hybrid · 🏢 Vor Ort) and 🗣 the language. Easy-track
+messages add a 🟦 header so the second stream is unmistakable. Messages are
+rate-limited (~0.7s apart) so a burst of matches doesn't trip Telegram's limits.
 
 ---
 
@@ -210,5 +242,7 @@ file; the scoring weights are `SCORING_INSTRUCTIONS`. Edit those to retune fit.
   postings, so we never ping twice.
 - `matches.json` — full audit backlog of everything scored, tagged
   `push` / `maybe` / `low`. Your safety net: review it for near-misses.
+- `seen_easy.json` / `matches_easy.json` — the same two files for the
+  **"No Easy Jobs for Rose"** track.
 
-Both are committed back by the workflow after each run.
+All are committed back by the workflow after each run.
