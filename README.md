@@ -115,17 +115,20 @@ python jobmonitor.py --test       # push one sample match (sanity-check Telegram
 
 Environment overrides (no code changes needed):
 
+*(Score/digest/age defaults are in temporary **recall mode** while the candidate is job-hunting — wider nets, more options. Raise them back later.)*
+
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `MIN_FIT_SCORE`   | `50` | niche push threshold |
-| `MAYBE_MIN_SCORE` | `40` | log-as-"maybe" floor |
-| `PREFILTER_MIN`   | `35` | Haiku cutoff before Opus scoring |
-| `MAX_LLM_CALLS`   | `70` | hard cap on API calls per run, **per track** (cost ceiling) |
+| `MIN_FIT_SCORE`   | `45` | niche push threshold |
+| `MAYBE_MIN_SCORE` | `30` | log-as-"maybe" floor |
+| `PREFILTER_MIN`   | `25` | Haiku cutoff before Opus scoring |
+| `MAX_LLM_CALLS`   | `120` | hard cap on API calls per run, **per track** (cost ceiling) |
+| `MAX_AGE_DAYS`    | `21` | drop postings older than this (when the post date is known) |
 | `SCORE_BATCH`     | `8`  | postings scored per LLM call |
-| `SCORING_MODEL`   | `claude-opus-4-8` | precise scorer |
-| `PREFILTER_MODEL` | `claude-haiku-4-5` | cheap first pass |
-| `EASY_MIN_SCORE` / `EASY_MAYBE_MIN` | `60` / `45` | easy-track push / maybe thresholds |
+| `SCORING_MODEL` / `PREFILTER_MODEL` | `claude-opus-4-8` / `claude-haiku-4-5` | precise scorer / cheap first pass |
+| `EASY_MIN_SCORE` / `EASY_MAYBE_MIN` | `50` / `35` | easy-track push / maybe thresholds |
 | `EASY_ENABLED`    | `1`  | set `0` to disable the easy track entirely |
+| `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | – | optional free [Adzuna](https://developer.adzuna.com/signup) key (extra easy-track volume); no-op if unset |
 
 ---
 
@@ -155,21 +158,29 @@ Sources live in the `SOURCES` list near the top of `jobmonitor.py`. Each run
 logs a per-source line tagged `verified` / `UNVERIFIED` and its item count —
 use `--dry-run` to see it.
 
-**Active by default:**
+Most sources need **no API key**. A live-verified sweep (2026-06-19) added several
+real job-board APIs/feeds, which give true posting dates (so stale listings get
+dropped) and curated, scam-free data.
 
-| Source | Tier | Type | Status |
-|--------|------|------|--------|
-| academics.de | A (academic) | server-rendered search | ✅ verified (~80 items, German academic board) |
-| greenjobs.de | B (climate/sustainability) | RSS (Atom) | ✅ verified working (~260 items) |
-| EGU job board | B (geoscience) | RSS | ✅ verified (~10 items) |
-| Transsolar careers · Drees & Sommer | D (employer) | HTML scrape | ✅ returns job links |
-| Serper (Google SERP) | C (cross-board breadth) | JSON API | ⚙️ gated — no-op until you add `SERPER_API_KEY` |
+**Niche track (`SOURCES`) — active by default:**
 
-**`DISABLED_SOURCES`** (documented but not run) holds high-value academic
-targets — **EURAXESS, jobs.ac.uk, Fraunhofer IBP** — that a generic fetcher
-can't reach (403/404 bot-blocking, or JS-rendered portals with no API, sitemap,
-or RSS). The robust way to cover them is **Tier C** below (search-engine index),
-not a direct fetcher.
+| Source | Key? | What it adds |
+|--------|------|--------------|
+| **Arbeitsagentur** (German federal jobs API) | none | huge German coverage (~120/run); German occupation terms |
+| **EURAXESS** | none | EU research jobs (now server-rendered, GET facet filters) |
+| **Nature Careers** (RSS) · **jobs.ac.uk** | none | international academic/research roles |
+| academics.de · greenjobs.de · EGU | none | German academic + climate boards |
+| Transsolar · Drees & Sommer | none | Munich employer pages |
+| Serper (Google SERP) | `SERPER_API_KEY` | cross-board breadth |
+
+**Easy track (`EASY_SOURCES`):** Serper Easy · **Arbeitsagentur** (Munich) ·
+**Himalayas** · **Arbeitnow** · **Jobicy** (free remote-jobs APIs, no key) ·
+**Adzuna** (gated on `ADZUNA_APP_ID`/`KEY` — free, best freshness).
+
+**Quality guards (all sources):** `is_scam_or_junk()` drops fake free-host
+aggregators (e.g. `*.liveblog365.com`), board *search* pages, and lead-gen scams
+**before** the LLM; a freshness gate drops anything older than `MAX_AGE_DAYS`.
+`DISABLED_SOURCES` now holds only **Fraunhofer IBP** (JS SuccessFactors portal).
 
 ### Enabling cross-board breadth — Serper.dev (Tier C)
 

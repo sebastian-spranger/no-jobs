@@ -6,7 +6,7 @@ name: jobmonitor
 
 on:
   schedule:
-    - cron: "0 7,11,15,19 * * *"  # 9am/1pm/5pm/9pm CEST (UTC+2) — daytime only
+    - cron: "0 6,9,12,15,18,21 * * *"  # 6×/day (8am–11pm CEST) — recall mode while job-hunting
   workflow_dispatch:
     inputs:
       dry_run:
@@ -52,6 +52,11 @@ jobs:
           # Serper (Google SERP). No-op if unset, but then the easy track finds
           # nothing — set SERPER_API_KEY in repo Secrets.
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          # Optional: Adzuna (Germany) job API for the easy track — free key, no
+          # card (developer.adzuna.com/signup). No-op if unset. Most new sources
+          # (Bundesagentur, EURAXESS, Nature, Himalayas, Arbeitnow, Jobicy) need NO key.
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
           # Optional: legacy Tier C Google Programmable Search (no-op if unset).
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import logging
 import os
@@ -104,31 +105,45 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-MIN_FIT_SCORE   = _env_int("MIN_FIT_SCORE", 50)      # nur Treffer >= diesem Score pushen
-MAYBE_MIN_SCORE = _env_int("MAYBE_MIN_SCORE", 40)    # 40-49 -> als "maybe" in matches.json loggen
-PREFILTER_MIN   = _env_int("PREFILTER_MIN", 35)      # Haiku-Cutoff vor dem teuren Opus-Scoring
+# RECALL MODE (2026-06-19): thresholds lowered while the candidate is job-hunting
+# under a hard deadline — better a few false positives than a missed real job. The
+# anti-scam/realism rubric + freshness gate guard precision. Raise these back after
+# she lands a role (see CLAUDE.md changelog).
+MIN_FIT_SCORE   = _env_int("MIN_FIT_SCORE", 45)      # nur Treffer >= diesem Score pushen
+MAYBE_MIN_SCORE = _env_int("MAYBE_MIN_SCORE", 30)    # 30-44 -> als "maybe" in matches.json loggen
+PREFILTER_MIN   = _env_int("PREFILTER_MIN", 25)      # Haiku-Cutoff vor dem teuren Opus-Scoring
 
 # Daily digest: even on days with no >= MIN_FIT_SCORE match, push ONE overview of
 # the best available postings so she always sees what's out there. Sent only on
 # the run whose UTC hour == DIGEST_HOUR (07 UTC = 9am CEST, the first daytime run).
 DIGEST_ENABLED  = os.environ.get("DIGEST_ENABLED", "1").strip() not in ("0", "false", "")
 DIGEST_HOUR_UTC = _env_int("DIGEST_HOUR_UTC", 7)     # 9am CEST
-DIGEST_TOP_N    = _env_int("DIGEST_TOP_N", 5)
+DIGEST_HOUR_UTC_2 = _env_int("DIGEST_HOUR_UTC_2", 15)  # 5pm CEST — second daily digest (recall mode)
+DIGEST_TOP_N    = _env_int("DIGEST_TOP_N", 8)        # show more options per digest
 
 LOCATIONS = [
     "München", "Munich", "Bayern", "Bavaria",
     "remote", "EU remote", "remote Germany", "hybrid Munich",
 ]
 
-MAX_LLM_CALLS   = _env_int("MAX_LLM_CALLS", 70)      # Kostendeckel pro Lauf (gesamt, beide Stufen)
+MAX_LLM_CALLS   = _env_int("MAX_LLM_CALLS", 120)     # Kostendeckel pro Lauf, PRO Track (mehr Quellen)
 SCORE_BATCH     = _env_int("SCORE_BATCH", 8)         # Postings pro LLM-Call (Batching senkt Kosten)
+
+# Freshness gate: drop postings whose KNOWN posting date is older than this many
+# days (unknown date -> kept, fail-open). The API sources also filter server-side.
+MAX_AGE_DAYS    = _env_int("MAX_AGE_DAYS", 21)
+
+# Cap pings per run per track so a first-run backlog doesn't wall her with 30+
+# messages at once. Pushes are urgency-sorted, so the most urgent go first; the
+# overflow is left UNSEEN and rolls to the next run (every few hours).
+MAX_PUSHES_PER_RUN = _env_int("MAX_PUSHES_PER_RUN", 15)
 
 # Deadline enrichment: fetch the job page for each strong/maybe match and pull
 # the application deadline (it is NOT in the RSS/HTML feed snippets). Own small
 # LLM budget so it never starves scoring. Drives the priority label in the ping.
 DEADLINE_SOON_DAYS  = _env_int("DEADLINE_SOON_DAYS", 7)    # <= -> 🔴 dringend
 DEADLINE_WATCH_DAYS = _env_int("DEADLINE_WATCH_DAYS", 21)  # <= -> 🟠 bald bewerben
-DEADLINE_MAX_CALLS  = _env_int("DEADLINE_MAX_CALLS", 6)    # eigener LLM-Deckel für Deadline-Extraktion
+DEADLINE_MAX_CALLS  = _env_int("DEADLINE_MAX_CALLS", 12)   # eigener LLM-Deckel für Deadline-Extraktion
 DEADLINE_PAGE_CHARS = _env_int("DEADLINE_PAGE_CHARS", 6000)  # wieviel Seitentext an die LLM geht
 
 SCORING_MODEL   = os.environ.get("SCORING_MODEL", "claude-opus-4-8")
@@ -148,9 +163,9 @@ MATCHES_FILE    = os.environ.get("MATCHES_FILE", "matches.json")
 # its own state files so it never collides with the niche track. It has its own
 # rubric, sources, thresholds and LLM budget (see EASY_TRACK below).
 EASY_ENABLED       = os.environ.get("EASY_ENABLED", "1").strip() not in ("0", "false", "")
-EASY_MIN_SCORE     = _env_int("EASY_MIN_SCORE", 60)    # push threshold (easy stream)
-EASY_MAYBE_MIN     = _env_int("EASY_MAYBE_MIN", 45)    # 45-59 -> "maybe" in matches_easy.json
-EASY_PREFILTER_MIN = _env_int("EASY_PREFILTER_MIN", 35)
+EASY_MIN_SCORE     = _env_int("EASY_MIN_SCORE", 50)    # push threshold (recall mode)
+EASY_MAYBE_MIN     = _env_int("EASY_MAYBE_MIN", 35)    # 35-49 -> "maybe" in matches_easy.json
+EASY_PREFILTER_MIN = _env_int("EASY_PREFILTER_MIN", 25)
 EASY_MAX_LLM_CALLS = _env_int("EASY_MAX_LLM_CALLS", MAX_LLM_CALLS)  # own cost ceiling
 EASY_SEEN_FILE     = os.environ.get("EASY_SEEN_FILE", "seen_easy.json")
 EASY_MATCHES_FILE  = os.environ.get("EASY_MATCHES_FILE", "matches_easy.json")
@@ -226,6 +241,17 @@ For each posting return:
   work_mode      : one of "remote", "hybrid", "onsite", "unknown"
                    (remote = fully remote/home-office; hybrid = partly on-site;
                     onsite = fixed workplace). Infer from the text; "unknown" if unstated.
+
+ANTI-SCAM / REALISM (hard down-weight):
+- If the posting shows lead-generation or fast-money signals — "work from home / earn
+  €X per day / no experience needed / immediate start / weekly pay / registration or
+  processing fee / pay via crypto / apply via WhatsApp or Telegram / be your own boss /
+  data entry from home" — score it 0-10. These are scams, not jobs.
+- If the employer is unnamed/vague, the apply path is a personal email
+  (gmail/yahoo/outlook), or the "description" reads like an AI refusal, score 0-10.
+- Reward a REALISTIC CHANCE OF BEING HIRED: a named, real employer, a concrete role, a
+  direct apply link, and requirements she plausibly meets -> boost. Prefer roles where
+  she is clearly qualified or overqualified over highly-competitive long-shots.
 """
 
 # Coarse first-pass instructions for the Haiku prefilter (the niche track).
@@ -290,8 +316,26 @@ Weighting:
   manual/service -> LOW.
 
 Be calibrated: reserve 70+ for roles she could genuinely land quickly AND that pay
-decently AND are in Munich or remote. Optimize for precision — a high score should mean
-"she could realistically have this job soon."
+decently AND are in Munich or remote. A high score should mean "she could realistically
+have this job soon." (Thresholds are in recall mode while she job-hunts — surface
+plausible real roles; the hard constraints below keep out the truly unsuitable.)
+
+QUALIFICATION & LANGUAGE REALISM (this channel is about getting hired FAST):
+- Penalize roles whose hard requirements she lacks: fluent/native GERMAN (C1/C2,
+  "verhandlungssicher", "muttersprachlich"), or a German licence/qualification she does
+  not hold (German-bar lawyer, Approbation/medical licence, Steuerberater, German-specific
+  certifications, security clearance). These make a fast hire unrealistic -> score LOW.
+- Strongly reward English-working-language roles and roles explicitly open to
+  limited-German / international candidates.
+- Treat decent professional PAY and FAST/low-barrier hiring as positives; treat "highly
+  competitive" / "many years German-market experience required" as negatives here.
+
+ANTI-SCAM / REALISM (hard down-weight):
+- Lead-gen / fast-money signals ("work from home, earn €X/day, no experience needed,
+  immediate start, weekly pay, registration/processing fee, crypto, apply via
+  WhatsApp/Telegram, be your own boss, data entry from home") -> score 0-10: scams.
+- Unnamed/vague employer, personal-email apply path (gmail/yahoo), or an AI-refusal-style
+  "description" -> score 0-10. Reward named real employers with a direct apply link.
 
 For each posting return the SAME fields as the other rubric:
   score, reason (one short line), location_fit, language_flag, work_mode.
@@ -353,6 +397,51 @@ SOURCES: list[dict[str, Any]] = [
         "queries": [
             "Stadtklima", "thermischer Komfort", "Bauphysik", "Klimaanpassung",
             "Mikroklima", "urban climate", "nachhaltiges Bauen", "Umweltmeteorologie",
+        ],
+        "verified": True,
+    },
+    # ---- Tier A: real job-board APIs/feeds (no key, real post-dates) ----
+    # Bundesagentur für Arbeit — Germany's official national board (static public
+    # X-API-Key, server-side freshness). German occupation terms (the search is
+    # lexical, not semantic). Covers the niche + adjacent German research roles.
+    {
+        "name": "Arbeitsagentur (niche)",
+        "tier": "A",
+        "type": "bundesagentur",
+        "queries": [
+            "Stadtklima", "Klimatologie", "Meteorologie", "Bauphysik",
+            "Stadtplanung", "Geoinformation", "Umweltwissenschaft", "Klimaanpassung",
+        ],
+        "veroeffentlichtseit": 14,
+        "verified": True,
+    },
+    # EURAXESS — EU research-jobs board, now server-rendered (GET facet filters).
+    # 195 Environmental science · 219 Geosciences · 345 Physics. Her #1 niche gap.
+    {
+        "name": "EURAXESS",
+        "tier": "A",
+        "type": "euraxess",
+        "research_fields": [195, 219, 345],
+        "verified": True,
+    },
+    # Nature Careers — RSS, one feed per niche keyword (RFC822 pubDate).
+    {
+        "name": "Nature Careers",
+        "tier": "A",
+        "type": "nature",
+        "queries": [
+            "urban climate", "thermal comfort", "building physics",
+            "environmental meteorology", "climate research scientist", "urban microclimate",
+        ],
+        "verified": True,
+    },
+    # jobs.ac.uk — UK/intl academic board, server-rendered search (RSS gone).
+    {
+        "name": "jobs.ac.uk",
+        "tier": "A",
+        "type": "jobs_ac_uk",
+        "queries": [
+            "urban climate", "thermal comfort", "building physics", "environmental meteorology",
         ],
         "verified": True,
     },
@@ -428,22 +517,10 @@ SOURCES: list[dict[str, Any]] = [
 # or JS-rendered portals). Wire one up by writing a small fetch_* function that
 # returns Posting objects, then move its dict into SOURCES above.
 DISABLED_SOURCES: list[dict[str, Any]] = [
-    {
-        "name": "EURAXESS",
-        "tier": "A",
-        # Returns HTTP 403 to automated clients; the old /jobs/search/rss feed is
-        # gone. Use the EURAXESS search UI's underlying data endpoint or a
-        # Programmable Search restricted to euraxess.ec.europa.eu.
-        "url": "https://euraxess.ec.europa.eu/jobs/search",
-    },
-    {
-        "name": "jobs.ac.uk",
-        "tier": "A",
-        # Has RSS by subject-area/location/role at https://www.jobs.ac.uk/feeds
-        # but bot-blocks automated fetchers (404). Discover the real feed href
-        # from a browser, or query it via Programmable Search.
-        "url": "https://www.jobs.ac.uk/feeds",
-    },
+    # EURAXESS and jobs.ac.uk were moved INTO SOURCES on 2026-06-19 — a live sweep
+    # found EURAXESS is now server-rendered (GET facet filters) and jobs.ac.uk's
+    # search is scrapeable with a browser UA (its RSS is gone). See fetch_euraxess
+    # / fetch_jobs_ac_uk.
     {
         "name": "Fraunhofer IBP (Bauphysik, Holzkirchen)",
         "tier": "D",
@@ -477,6 +554,70 @@ EASY_SOURCES: list[dict[str, Any]] = [
             "project coordinator Munich English",
             "English speaking jobs Munich",
             "English teacher Munich",
+        ],
+        "verified": True,
+    },
+    # Bundesagentur für Arbeit (Munich-area, easy/adjacent German terms). No key.
+    {
+        "name": "Arbeitsagentur (easy)",
+        "tier": "A",
+        "type": "bundesagentur",
+        "queries": [
+            "Data Analyst", "Datenanalyst", "GIS", "Nachhaltigkeit",
+            "Umwelt", "wissenschaftlicher Mitarbeiter", "Projektkoordination",
+        ],
+        "wo": "München",
+        "umkreis": 50,
+        "veroeffentlichtseit": 14,
+        "verified": True,
+    },
+    # Himalayas — free remote-jobs API, Germany-eligible, gives expiryDate. No key.
+    {
+        "name": "Himalayas (remote)",
+        "tier": "C",
+        "type": "himalayas",
+        "queries": [
+            "data analyst", "sustainability", "ESG", "GIS",
+            "technical writer", "project coordinator", "research analyst",
+        ],
+        "verified": True,
+    },
+    # Arbeitnow — free German + remote firehose (no key, no query filter). No key.
+    {
+        "name": "Arbeitnow (DE/remote)",
+        "tier": "C",
+        "type": "arbeitnow",
+        "pages": 2,
+        "verified": True,
+    },
+    # Jobicy — free remote-jobs API (Europe/EMEA buckets). No key.
+    {
+        "name": "Jobicy (remote)",
+        "tier": "C",
+        "type": "jobicy",
+        "combos": [
+            {"geo": "europe", "industry": "data-science"},
+            {"geo": "europe", "industry": "business"},
+            {"geo": "europe", "industry": "copywriting"},
+            {"geo": "europe"},
+        ],
+        "verified": True,
+    },
+    # Adzuna (Germany) — best EASY-tier freshness. GATED: no-op unless
+    # ADZUNA_APP_ID + ADZUNA_APP_KEY are set (free signup, no card). See README.
+    {
+        "name": "Adzuna (DE)",
+        "tier": "C",
+        "type": "adzuna",
+        "max_days_old": 7,
+        "distance": 40,
+        "queries": [
+            {"what": "data analyst", "where": "Munich"},
+            {"what": "GIS", "where": "Munich"},
+            {"what": "sustainability", "where": "Munich"},
+            {"what": "research analyst", "where": "Munich"},
+            {"what": "data analyst", "where": "Deutschland"},
+            {"what": "sustainability ESG", "where": "Deutschland"},
         ],
         "verified": True,
     },
@@ -526,12 +667,24 @@ class Posting:
 
     @property
     def dedup_key(self) -> str:
-        """Cross-source dedup: same role on several boards -> employer+title."""
-        return _norm(self.employer) + "::" + _norm(self.title)
+        """Cross-source dedup: same role on several boards -> employer+title.
+        Title is normalized (strip (m/w/d), gender markers, trailing location)
+        so the same role with slightly different titles across boards collapses."""
+        return _norm(self.employer) + "::" + _dedup_title(self.title)
 
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def _dedup_title(s: str) -> str:
+    """Normalize a title for cross-board dedup."""
+    s = _norm(s)
+    s = re.sub(r"\(?\b[mwfdx](?:\s*/\s*[mwfdx]){1,2}\b\)?", "", s)          # (m/w/d), m/f/d
+    s = re.sub(r"\s*[-–—|·,(]+\s*(remote|home.?office|münchen|munich|"
+               r"deutschland|germany|bayern|bavaria|hybrid|vollzeit|teilzeit|full.?time|part.?time).*$",
+               "", s)                                                        # trailing location/mode
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def _canonical_url(url: str) -> str:
@@ -848,31 +1001,454 @@ def _guess_location(text: str) -> str:
     return ""
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# 5b. Real job-board API fetchers (volume + freshness + legitimacy)
+# ──────────────────────────────────────────────────────────────────────────
+# Added 2026-06-19 after a live source-verification sweep. These structured APIs
+# return a real posting DATE (so stale listings can be dropped) and curated,
+# scam-free job data. Each is defensive and fail-open; keyed ones (Adzuna) no-op
+# when their env key is unset, like Serper.
+
+# Several boards (EURAXESS, jobs.ac.uk) 403 a UA containing "Bot", so the API/
+# scrape fetchers send a realistic browser UA instead of the polite USER_AGENT.
+_BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+
+
+def _http_get_json(url: str, *, headers: dict | None = None, params: dict | None = None,
+                   method: str = "GET", json_body: dict | None = None):
+    """GET/POST returning parsed JSON, or None on any non-200 / non-JSON (fail-open)."""
+    try:
+        h = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
+        if headers:
+            h.update(headers)
+        if method == "POST":
+            resp = requests.post(url, headers=h, json=json_body, timeout=HTTP_TIMEOUT)
+        else:
+            resp = requests.get(url, headers=h, params=params, timeout=HTTP_TIMEOUT)
+        if resp.status_code != 200:
+            log.warning("  %s -> HTTP %s", url[:64], resp.status_code)
+            return None
+        body = resp.text.lstrip()
+        if not body.startswith(("{", "[")):
+            log.warning("  %s -> non-JSON response (likely a challenge/error page)", url[:64])
+            return None
+        return resp.json()
+    except Exception as exc:
+        log.warning("  %s -> %s", url[:64], exc)
+        return None
+
+
+def _epoch_to_iso(ts) -> str:
+    try:
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def fetch_bundesagentur(src: dict[str, Any]) -> list[Posting]:
+    """Bundesagentur für Arbeit Jobsuche API — Germany's official national job
+    board. NO key (static public X-API-Key). Loops German occupation terms
+    (the `was` search is lexical, not semantic). Server-side freshness via
+    `veroeffentlichtseit`. Covers both niche-research and easy roles."""
+    base = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs"
+    headers = {"X-API-Key": "jobboerse-jobsuche"}
+    days = src.get("veroeffentlichtseit", 14)
+    postings: list[Posting] = []
+    seen_ref: set[str] = set()
+    for term in src.get("queries", []):
+        params = {"was": term, "angebotsart": 1, "veroeffentlichtseit": days,
+                  "size": 100, "page": 1, "pav": "false"}
+        if src.get("wo"):
+            params["wo"] = src["wo"]
+            params["umkreis"] = src.get("umkreis", 50)
+        data = _http_get_json(base, headers=headers, params=params)
+        if not data:
+            continue
+        for it in data.get("stellenangebote", []):
+            ref = (it.get("refnr") or "").strip()
+            title = (it.get("titel") or it.get("beruf") or "").strip()
+            if not ref or not title or ref in seen_ref:
+                continue
+            seen_ref.add(ref)
+            ao = it.get("arbeitsort") or {}
+            ort = ", ".join(x for x in [ao.get("ort"), ao.get("region"), ao.get("land")] if x)
+            employer = (it.get("arbeitgeber") or "Arbeitsagentur").strip()
+            url = "https://www.arbeitsagentur.de/jobsuche/jobdetail/" + requests.compat.quote(ref)  # type: ignore[attr-defined]
+            postings.append(Posting(
+                title=title[:200], employer=employer,
+                location=ort or _guess_location(title), url=url, source=src["name"],
+                snippet=(f"{employer} · {ort}" if ort else employer)[:300],
+                date=(it.get("aktuelleVeroeffentlichungsdatum") or "")[:10],
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+        time.sleep(0.4)
+    return postings
+
+
+_EURAXESS_HREF = re.compile(r"^/jobs/\d+$")
+
+
+def fetch_euraxess(src: dict[str, Any]) -> list[Posting]:
+    """EURAXESS research jobs — now server-rendered (Drupal), GET-facet-filterable.
+    NO key; needs a browser User-Agent. Newest-first by research field."""
+    if BeautifulSoup is None:
+        return []
+    base = "https://euraxess.ec.europa.eu"
+    postings: list[Posting] = []
+    seen_links: set[str] = set()
+    for fid in src.get("research_fields", [195, 219, 345]):
+        url = (f"{base}/jobs/search?f%5B0%5D=job_research_field%3A{fid}"
+               "&sort%5Bname%5D=created&sort%5Bdirection%5D=DESC")
+        try:
+            resp = requests.get(url, headers={"User-Agent": _BROWSER_UA}, timeout=HTTP_TIMEOUT)
+            if resp.status_code != 200:
+                log.warning("  EURAXESS field %s -> HTTP %s", fid, resp.status_code)
+                continue
+            soup = BeautifulSoup(resp.text, "html.parser")
+        except Exception as exc:
+            log.warning("  EURAXESS field %s failed: %s", fid, exc)
+            continue
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if not _EURAXESS_HREF.match(href):
+                continue
+            full = base + href
+            text = re.sub(r"\s+", " ", a.get_text(" ")).strip()
+            if full in seen_links or len(text) < 8:
+                continue
+            seen_links.add(full)
+            postings.append(Posting(
+                title=text[:200], employer="EURAXESS", location=_guess_location(text),
+                url=full, source=src["name"], snippet=text[:300], date="",
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+        time.sleep(0.4)
+    return postings
+
+
+def fetch_nature(src: dict[str, Any]) -> list[Posting]:
+    """Nature Careers RSS — one feed per niche keyword. RFC822 pubDate."""
+    if feedparser is None:
+        return []
+    base = "https://www.nature.com/naturecareers/jobsrss/"
+    postings: list[Posting] = []
+    seen: set[str] = set()
+    for q in src.get("queries", []):
+        try:
+            resp = _http_get(base + "?keywords=" + requests.compat.quote(q))  # type: ignore[attr-defined]
+            feed = feedparser.parse(resp.content)
+        except Exception as exc:
+            log.warning("  Nature %r failed: %s", q, exc)
+            continue
+        for e in feed.entries[:30]:
+            link = (e.get("link") or "").strip()
+            title = (e.get("title") or "").strip()
+            if not link or not title or link in seen:
+                continue
+            seen.add(link)
+            summary = e.get("summary", "") or e.get("description", "")
+            postings.append(Posting(
+                title=title[:200], employer="Nature Careers",
+                location=_guess_location(title + " " + summary), url=link,
+                source=src["name"], snippet=_clean_text(summary),
+                date=str(e.get("published") or e.get("updated") or "")[:40],
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+    return postings
+
+
+def fetch_jobs_ac_uk(src: dict[str, Any]) -> list[Posting]:
+    """jobs.ac.uk — server-rendered search (RSS gone). Browser UA. Niche keywords."""
+    if BeautifulSoup is None:
+        return []
+    base = "https://www.jobs.ac.uk"
+    postings: list[Posting] = []
+    seen: set[str] = set()
+    for q in src.get("queries", []):
+        try:
+            resp = requests.get(f"{base}/search/?keywords={requests.compat.quote(q)}&sort=re",  # type: ignore[attr-defined]
+                                headers={"User-Agent": _BROWSER_UA}, timeout=HTTP_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, "html.parser")
+        except Exception as exc:
+            log.warning("  jobs.ac.uk %r failed: %s", q, exc)
+            continue
+        for a in soup.select('a[href^="/job/"]'):
+            href = (a.get("href") or "").strip()
+            text = re.sub(r"\s+", " ", a.get_text(" ")).strip()
+            full = base + href
+            if not href or len(text) < 8 or full in seen:
+                continue
+            seen.add(full)
+            postings.append(Posting(
+                title=text[:200], employer="jobs.ac.uk", location=_guess_location(text),
+                url=full, source=src["name"], snippet=text[:300], date="",
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+        time.sleep(0.4)
+    return postings
+
+
+def fetch_himalayas(src: dict[str, Any]) -> list[Posting]:
+    """Himalayas remote jobs — free JSON API, Germany-eligible filter, gives
+    pubDate AND expiryDate (the latter pre-fills the deadline, no page fetch)."""
+    base = "https://himalayas.app/jobs/api/search"
+    postings: list[Posting] = []
+    seen: set[Any] = set()
+    for q in src.get("queries", []):
+        data = _http_get_json(base, params={"q": q, "country": "Germany",
+                                            "sort": "recent", "limit": 20})
+        if not data:
+            continue
+        for it in data.get("jobs", []):
+            url = (it.get("applicationLink") or it.get("url") or "").strip()
+            title = html.unescape((it.get("title") or "").strip())
+            guid = it.get("guid") or url
+            if not url or not title or guid in seen:
+                continue
+            seen.add(guid)
+            p = Posting(
+                title=title[:200], employer=html.unescape((it.get("companyName") or "Himalayas").strip()),
+                location="Remote", url=url, source=src["name"],
+                snippet=_clean_text(it.get("excerpt") or it.get("description") or ""),
+                date=_epoch_to_iso(it.get("pubDate")),
+            )
+            p.deadline = _epoch_to_iso(it.get("expiryDate")) or ""
+            postings.append(p)
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+        time.sleep(0.3)
+    return postings
+
+
+def fetch_arbeitnow(src: dict[str, Any]) -> list[Posting]:
+    """Arbeitnow job board API — free, no key, German + remote firehose
+    (no working query filter; client-side filter + LLM does the rest)."""
+    base = "https://www.arbeitnow.com/api/job-board-api"
+    postings: list[Posting] = []
+    for page in range(1, src.get("pages", 2) + 1):
+        data = _http_get_json(base, params={"page": page})
+        if not data:
+            break  # Cloudflare 429 returns non-JSON -> stop politely
+        for it in data.get("data", []):
+            url = (it.get("url") or "").strip()
+            title = (it.get("title") or "").strip()
+            if not url or not title:
+                continue
+            loc = (it.get("location") or "").strip()
+            if it.get("remote"):
+                loc = (loc + " (Remote)").strip()
+            postings.append(Posting(
+                title=title[:200], employer=(it.get("company_name") or "Arbeitnow").strip(),
+                location=loc or _guess_location(title), url=url, source=src["name"],
+                snippet=_clean_text(it.get("description") or ""),
+                date=_epoch_to_iso(it.get("created_at")),
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+        time.sleep(2.0)  # Cloudflare throttles 3-4 rapid calls
+    return postings
+
+
+def fetch_jobicy(src: dict[str, Any]) -> list[Posting]:
+    """Jobicy remote-jobs API — free, no key. Europe/EMEA remote roles."""
+    base = "https://jobicy.com/api/v2/remote-jobs"
+    postings: list[Posting] = []
+    seen: set[Any] = set()
+    for combo in src.get("combos", [{"geo": "europe"}]):
+        params = {"count": 100}
+        params.update(combo)
+        data = _http_get_json(base, params=params)
+        if not data or not data.get("jobCount"):
+            continue
+        for it in data.get("jobs", []):
+            url = (it.get("url") or "").strip()
+            title = html.unescape((it.get("jobTitle") or "").strip())
+            jid = it.get("id") or url
+            if not url or not title or jid in seen:
+                continue
+            seen.add(jid)
+            postings.append(Posting(
+                title=title[:200], employer=html.unescape((it.get("companyName") or "Jobicy").strip()),
+                location=(it.get("jobGeo") or "Remote").strip(), url=url, source=src["name"],
+                snippet=_clean_text(it.get("jobExcerpt") or ""), date=str(it.get("pubDate") or "")[:10],
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+        time.sleep(0.3)
+    return postings
+
+
+def fetch_adzuna(src: dict[str, Any]) -> list[Posting]:
+    """Adzuna Jobs API (Germany) — best EASY-tier freshness (server-side
+    max_days_old + sort_by=date). Gated: no-op unless ADZUNA_APP_ID/KEY set."""
+    app_id = os.environ.get("ADZUNA_APP_ID", "").strip()
+    app_key = os.environ.get("ADZUNA_APP_KEY", "").strip()
+    if not app_id or not app_key:
+        log.info("  Adzuna skipped (ADZUNA_APP_ID / ADZUNA_APP_KEY not set)")
+        return []
+    base = "https://api.adzuna.com/v1/api/jobs/de/search/1"
+    days = src.get("max_days_old", 14)
+    postings: list[Posting] = []
+    seen: set[str] = set()
+    for q in src.get("queries", []):
+        what = q["what"] if isinstance(q, dict) else q
+        params = {"app_id": app_id, "app_key": app_key, "results_per_page": 50,
+                  "what": what, "max_days_old": days, "sort_by": "date",
+                  "content-type": "application/json"}
+        if isinstance(q, dict) and q.get("where"):
+            params["where"] = q["where"]
+            params["distance"] = src.get("distance", 40)
+        data = _http_get_json(base, params=params)
+        if not data:
+            continue
+        for it in data.get("results", []):
+            url = (it.get("redirect_url") or "").strip()
+            title = _clean_text(it.get("title") or "")
+            if not url or not title or url in seen:
+                continue
+            seen.add(url)
+            postings.append(Posting(
+                title=title[:200], employer=(it.get("company") or {}).get("display_name", "") or "Adzuna",
+                location=(it.get("location") or {}).get("display_name", "") or _guess_location(title),
+                url=url, source=src["name"], snippet=_clean_text(it.get("description") or ""),
+                date=(it.get("created") or "")[:10],
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+    return postings
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 5c. Scam / junk filter + freshness gate (applied to EVERY posting in gather)
+# ──────────────────────────────────────────────────────────────────────────
+# Caught live: careersprint.7f.liveblog365.com auto-generating fake "job" pages
+# (one page's title was literally an AI scam-refusal). Block the free-host
+# aggregator family, board search/listing pages, and lead-gen red flags BEFORE
+# the LLM ever sees them, so they never ping Rose and never burn a token.
+
+_SCAM_HOST = re.compile(
+    r"(?:^|\.)(?:"
+    r"liveblog365\.com|profreehost\.com|"                                  # ProFreeHost
+    r"epizy\.com|rf\.gd|free\.nf|great-site\.net|kesug\.com|lovestoblog\.com|"
+    r"infinityfreeapp\.com|42web\.io|22web\.org|66ghz\.com|totalh\.net|"
+    r"freecluster\.eu|gt\.tc|gamer\.gd|page\.gd|xo\.je|infinityfree\.me|"   # InfinityFree
+    r"byethost\d*\.com|byet\.host|wuaze\.com|fanclub\.rocks|nichesite\.org|"
+    r"is-great\.(?:net|org)|is-best\.net|iblogger\.org|web1337\.net|"
+    r"000webhostapp\.com|"                                                  # other free PHP hosts
+    r"blogspot\.com|wordpress\.com|weebly\.com|wixsite\.com|sites\.google\.com)$",  # free blog hosts
+    re.I,
+)
+_SCAM_SUBDOMAIN = re.compile(
+    r"^(?:careersprint|jobs?\w*|career\w*|hiring\w*|workfrom\w*|remote\w*|earn\w*)\.",
+    re.I,
+)
+# Big-board URLs Serper surfaces: KEEP detail pages, DROP search/listing pages.
+_BOARD_DETAIL = re.compile(
+    r"(/viewjob\?.*\bjk=|/rc/clk\?.*jk=|/job-listing/.*JV_IC|"
+    r"/partner/jobListing\.htm\?.*jobListingId=|/jobs/view/\d+|"
+    r"/stellenangebote--|/jobs/[a-z0-9-]+-\d+)",
+    re.I,
+)
+_BOARD_SEARCH = re.compile(
+    r"(/q-.*-jobs\.html|indeed\.[a-z.]+/jobs\?|SRCH_|glassdoor\.[a-z.]+/Jobs/.*E\d+\.htm|"
+    r"linkedin\.com/jobs/search|[?&](q|keyword|query|search)=)",
+    re.I,
+)
+_SCAM_PHRASE = re.compile(
+    r"(work from home|earn \$?\d|make money|no experience (needed|required)|"
+    r"immediate start|\$\d{3,}/(day|week)|weekly pay|registration fee|processing fee|"
+    r"send (your )?(resume|cv) to .*@(gmail|yahoo|outlook|hotmail)\.|"
+    r"whatsapp (only|us)|unlimited earning|be your own boss|"
+    r"data entry from home|reshipping|package (handler|forwarding) from home|"
+    r"i cannot (assist|create|help|generate)|as an ai (language )?model|i'?m sorry,? but i)",
+    re.I,
+)
+
+
+def is_scam_or_junk(p: Posting) -> bool:
+    """True if a posting is a scam/lead-gen aggregator, a board search page, or
+    has lead-gen red flags. Applied to every Posting before the prefilter."""
+    host = (requests.compat.urlparse(p.url).netloc or "").replace("www.", "").lower()  # type: ignore[attr-defined]
+    if _SCAM_HOST.search(host):
+        return True
+    if _SCAM_SUBDOMAIN.search(host) and re.search(r"\.(tc|gd|je|nf|me)$|free|webhost|blogspot", host):
+        return True
+    if _SCAM_PHRASE.search(f"{p.title} {p.snippet}"):
+        return True
+    if _BOARD_SEARCH.search(p.url) and not _BOARD_DETAIL.search(p.url):
+        return True
+    return False
+
+
+def _parse_date_any(s: str) -> datetime | None:
+    """Best-effort parse of a Posting.date (ISO, ISO+tz, or RFC822) -> naive UTC."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    for cand in (s.replace("Z", "+00:00"), s[:19], s[:10]):
+        try:
+            return datetime.fromisoformat(cand).replace(tzinfo=None)
+        except Exception:
+            continue
+    try:
+        from email.utils import parsedate_to_datetime
+        d = parsedate_to_datetime(s)
+        return d.replace(tzinfo=None) if d else None
+    except Exception:
+        return None
+
+
+def _too_old(p: Posting) -> bool:
+    """True only when the posting's date is KNOWN and older than MAX_AGE_DAYS."""
+    d = _parse_date_any(p.date)
+    if d is None:
+        return False  # unknown date -> keep (fail-open)
+    age = (datetime.now(timezone.utc).replace(tzinfo=None) - d).days
+    return age > MAX_AGE_DAYS
+
+
 def gather(sources: list[dict[str, Any]] | None = None) -> list[Posting]:
-    """Run every source in `sources` (default SOURCES); failures logged & skipped."""
+    """Run every source in `sources` (default SOURCES); failures logged & skipped.
+    Drops scam/junk and stale postings per source before they reach the pipeline."""
     sources = sources if sources is not None else SOURCES
+    dispatch = {
+        "rss": fetch_rss, "html": fetch_html, "academics": fetch_academics,
+        "serper": fetch_serper, "google_cse": fetch_google_cse,
+        "bundesagentur": fetch_bundesagentur, "euraxess": fetch_euraxess,
+        "nature": fetch_nature, "jobs_ac_uk": fetch_jobs_ac_uk,
+        "himalayas": fetch_himalayas, "arbeitnow": fetch_arbeitnow,
+        "jobicy": fetch_jobicy, "adzuna": fetch_adzuna,
+    }
     all_postings: list[Posting] = []
     for src in sources:
+        fetcher = dispatch.get(src["type"])
+        if fetcher is None:
+            log.warning("Unknown source type %r for %s", src["type"], src["name"])
+            continue
         try:
-            if src["type"] == "rss":
-                got = fetch_rss(src)
-            elif src["type"] == "html":
-                got = fetch_html(src)
-            elif src["type"] == "academics":
-                got = fetch_academics(src)
-            elif src["type"] == "serper":
-                got = fetch_serper(src)
-            elif src["type"] == "google_cse":
-                got = fetch_google_cse(src)
-            else:
-                log.warning("Unknown source type %r for %s", src["type"], src["name"])
-                continue
+            got = fetcher(src)
+            kept, scam, stale = [], 0, 0
+            for x in got:
+                if is_scam_or_junk(x):
+                    scam += 1
+                elif _too_old(x):
+                    stale += 1
+                else:
+                    kept.append(x)
             tag = "verified" if src.get("verified") else "UNVERIFIED"
-            log.info("Source %-38s [tier %s · %-10s] -> %d items",
-                     src["name"], src["tier"], tag, len(got))
-            all_postings.extend(got)
+            extra = f"  (-{scam} junk, -{stale} stale)" if (scam or stale) else ""
+            log.info("Source %-30s [tier %s · %-10s] -> %d items%s",
+                     src["name"], src["tier"], tag, len(kept), extra)
+            all_postings.extend(kept)
         except Exception as exc:  # never let one source kill the run
-            log.warning("Source %-38s FAILED: %s", src["name"], exc)
+            log.warning("Source %-30s FAILED: %s", src["name"], exc)
     return all_postings
 
 
@@ -1671,10 +2247,10 @@ def run(dry_run: bool = False, only_track: str | None = None) -> int:
         log.error("Could not init Anthropic client: %s", exc)
         return 2
 
-    # Is this the once-a-day digest run? (first daytime cron, or forced for tests)
+    # Is this a digest run? Twice daily (DIGEST_HOUR_UTC / _2) in recall mode, or forced.
     digest_run = DIGEST_ENABLED and (
         os.environ.get("DIGEST_FORCE", "").strip() in ("1", "true")
-        or datetime.now(timezone.utc).hour == DIGEST_HOUR_UTC
+        or datetime.now(timezone.utc).hour in (DIGEST_HOUR_UTC, DIGEST_HOUR_UTC_2)
     )
 
     rc = 0
@@ -1761,6 +2337,12 @@ def run_track(client, track: Track, dry_run: bool = False, digest_run: bool = Fa
 
     # Most urgent first within the push (deadline buckets, then score).
     pushes.sort(key=_priority_rank)
+
+    # Cap pings per run; the overflow is left unseen and rolls to the next run.
+    if len(pushes) > MAX_PUSHES_PER_RUN:
+        log.info("Push cap: sending top %d of %d; %d roll to the next run",
+                 MAX_PUSHES_PER_RUN, len(pushes), len(pushes) - MAX_PUSHES_PER_RUN)
+        pushes = pushes[:MAX_PUSHES_PER_RUN]
 
     if dry_run:
         log.info("--dry-run [%s]: not pushing or persisting. Top results:", track.key)
