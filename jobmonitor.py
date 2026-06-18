@@ -266,22 +266,22 @@ SOURCES: list[dict[str, Any]] = [
     # card) reaching the big JS/bot-blocked boards via site:-restricted queries.
     # No-op unless SERPER_API_KEY is set — see README "Tier C setup".
     {
-        "name": "Serper (Google: EURAXESS/jobs.ac.uk/Nature/…)",
+        "name": "Serper (Google web search)",
         "tier": "C",
         "type": "serper",
+        # PLAIN keyword queries only — the free tier rejects site:/quotes/OR.
+        # Each surfaces her niche across EURAXESS / Nature / university boards;
+        # junk domains are filtered and the LLM scores the rest. (Verified live:
+        # returns MSCA fellowships, urban-microclimate postdocs, urban-heat PhDs.)
         "queries": [
-            # International research boards × her niche × research roles.
-            '(site:euraxess.ec.europa.eu OR site:jobs.ac.uk OR site:academics.com '
-            'OR site:nature.com OR site:academicpositions.com) '
-            '("thermal comfort" OR "urban climate" OR "urban microclimate" OR '
-            'microclimate OR biometeorology OR "building physics" OR "urban heat") '
-            '(postdoc OR researcher OR scientist OR professor OR fellowship)',
-            # EURAXESS focus (the single most important board) + German terms.
-            'site:euraxess.ec.europa.eu ("urban climate" OR microclimate OR '
-            '"thermal comfort" OR "climate adaptation" OR "building physics" OR '
-            'Stadtklima OR Bauphysik OR Mikroklima)',
+            "outdoor thermal comfort postdoc position",
+            "urban microclimate researcher university vacancy",
+            "urban heat climate adaptation postdoc",
+            "urban climate modelling research position",
+            "Stadtklima wissenschaftlicher Mitarbeiter Universität",
+            "Bauphysik thermischer Komfort Postdoc Stelle",
         ],
-        "verified": False,
+        "verified": True,
     },
     # ---- Tier C (legacy): Google Programmable Search ----
     # Custom Search JSON API. No-op unless BOTH GOOGLE_API_KEY and GOOGLE_CSE_ID
@@ -633,15 +633,29 @@ def fetch_google_cse(src: dict[str, Any]) -> list[Posting]:
     return postings
 
 
+# Non-job domains that pollute web-search results (social media, paper repos,
+# aggregators) — dropped before the LLM so they never burn prefilter calls.
+_SERPER_JUNK_DOMAIN = re.compile(
+    r"(facebook|instagram|linkedin|twitter|x\.com|youtube|tiktok|reddit|"
+    r"redcircle|spotify|podcast|pinterest|amazon|wikipedia|researchgate|"
+    r"biorxiv|medrxiv|arxiv\.org|ssrn|sciencedirect|springer|mdpi|"
+    r"semanticscholar|google\.com|glassdoor|indeed)",
+    re.I,
+)
+
+
 def fetch_serper(src: dict[str, Any]) -> list[Posting]:
     """Tier C: cross-board breadth via Serper.dev (Google SERP API).
 
-    The replacement for Google's Custom Search JSON API (which is closed to new
-    customers since 2026). Serper has an open free tier (2,500 searches/month, no
-    credit card). No-op unless SERPER_API_KEY is set. Each query is a niche +
-    site:-restricted Google search across the big JS/bot-blocked research boards
-    (EURAXESS, jobs.ac.uk, Nature Careers, academics.com, university pages) — the
-    organic results are turned into Postings and the LLM does the precision.
+    The replacement for Google's Custom Search JSON API (closed to new customers
+    since 2026). Serper has an open free tier (2,500 searches/month, no card).
+    No-op unless SERPER_API_KEY is set.
+
+    NOTE on the free tier: it rejects `site:` operators and complex boolean
+    queries ("Query pattern not allowed for free accounts"). So `queries` must be
+    plain keyword strings (no site:/quotes/OR). We run several niche queries,
+    drop social-media/paper-repo junk domains, and let the LLM do the precision —
+    EURAXESS, Nature, university boards still surface naturally in the results.
     """
     api_key = os.environ.get("SERPER_API_KEY", "").strip()
     if not api_key:
@@ -656,10 +670,11 @@ def fetch_serper(src: dict[str, Any]) -> list[Posting]:
             resp = requests.post(
                 "https://google.serper.dev/search", timeout=HTTP_TIMEOUT,
                 headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-                json={"q": q, "num": num, "tbs": tbs, "gl": "de", "hl": "de"},
+                json={"q": q, "num": num, "tbs": tbs, "gl": "de", "hl": "en"},
             )
             if resp.status_code != 200:
-                log.warning("  Serper HTTP %s: %s", resp.status_code, resp.text[:160])
+                log.warning("  Serper query %r HTTP %s: %s",
+                            q[:40], resp.status_code, resp.text[:120])
                 continue
             organic = resp.json().get("organic", [])
         except Exception as exc:
@@ -670,9 +685,11 @@ def fetch_serper(src: dict[str, Any]) -> list[Posting]:
             title = (it.get("title") or "").strip()
             if not link or not title or link in seen_links:
                 continue
+            domain = requests.compat.urlparse(link).netloc.replace("www.", "")  # type: ignore[attr-defined]
+            if _SERPER_JUNK_DOMAIN.search(domain):
+                continue  # social media / paper repos — not job postings
             seen_links.add(link)
             snippet = _clean_text(it.get("snippet", ""))
-            domain = requests.compat.urlparse(link).netloc.replace("www.", "")  # type: ignore[attr-defined]
             postings.append(Posting(
                 title=title[:200],
                 employer=domain or src["name"],

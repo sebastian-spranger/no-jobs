@@ -143,19 +143,23 @@ not a direct fetcher.
 
 The big international research boards (EURAXESS, jobs.ac.uk, Nature Careers,
 academics.com) are JS apps with no scrapeable feed. The way to reach **all of
-them at once** is a Google search API restricted to those domains. Google's own
-Custom Search JSON API is **closed to new customers** (full shutdown Jan 1 2027),
-so this project uses **[Serper.dev](https://serper.dev)** — an open Google-SERP
-API with a free tier (**2,500 searches/month, no credit card**).
+them at once** is a Google web-search API. Google's own Custom Search JSON API is
+**closed to new customers** (full shutdown Jan 1 2027), so this project uses
+**[Serper.dev](https://serper.dev)** — an open Google-SERP API with a free tier
+(**2,500 searches/month, no credit card**).
 
 **Setup (~2 min):**
 1. Sign up at [serper.dev](https://serper.dev) (Google login; no card).
 2. Copy your API key from the dashboard.
 3. Add it as `SERPER_API_KEY` — in the local `.env` and in GitHub repo Secrets.
 
-That's it — the `serper` source activates automatically and starts pulling her
-niche across EURAXESS et al. Tune the domain list / keywords in the source's
-`queries` in `jobmonitor.py`.
+That's it — the `serper` source activates automatically and pulls her niche
+across EURAXESS / Nature / university boards. Tune the keywords in the source's
+`queries` in `jobmonitor.py`. **Note:** the free tier only accepts *plain
+keyword* queries — `site:` filters, quotes and boolean `OR` are rejected
+("Query pattern not allowed for free accounts"), so each query is a simple phrase
+and a junk-domain filter (`_SERPER_JUNK_DOMAIN`) strips social-media/paper-repo
+noise before scoring.
 
 | Var | What it is |
 |-----|------------|

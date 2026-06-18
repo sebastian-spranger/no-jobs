@@ -1,9 +1,30 @@
 {
+  "14c4f1fcdccf1591": {
+    "digest": true,
+    "pushed": false,
+    "score": 25,
+    "title": "Projektleiter*in Wärmewende (Berlin / hybrid) - Agora Think Tanks gGmbH",
+    "ts": "2026-06-18T20:21:58+00:00"
+  },
   "1e6ddfc3c9908051": {
     "pushed": true,
     "score": 55,
     "title": "Stuttgart / Partnerfirma",
     "ts": "2026-06-18T10:02:39+00:00"
+  },
+  "25bf64536b67fca1": {
+    "digest": true,
+    "pushed": false,
+    "score": 38,
+    "title": "Projektleitung Stadtplanung (m/w/x) (München) - Sweco GmbH",
+    "ts": "2026-06-18T20:21:58+00:00"
+  },
+  "53cdc2a11bafe74e": {
+    "digest": true,
+    "pushed": false,
+    "score": 28,
+    "title": "Projektingenieur*in im Bereich Umweltplanung und Ausgleichsflächen (w/m/d) (München) - Landeshauptstadt München",
+    "ts": "2026-06-18T20:21:58+00:00"
   },
   "6f23b3741c6ac889": {
     "pushed": false,
@@ -11,16 +32,59 @@
     "title": "Experte (m/w/d) für energieeffiziente und klimaneutrale Gebäude (Berlin) - Deutsche Energie-Agentur GmbH (dena)",
     "ts": "2026-06-18T10:02:40+00:00"
   },
+  "6f3d83458eae9c5b": {
+    "digest": true,
+    "pushed": false,
+    "score": 22,
+    "title": "Bildungsreferent/in (m/w/d) für BNE & ökosystembasierte Klimaanpassung (Felde) - Naturpark Westensee – Obere Eider e.V.",
+    "ts": "2026-06-18T20:21:58+00:00"
+  },
   "77cda9a3a0bfe467": {
     "pushed": false,
     "score": 40,
     "title": "Wissenschaftliche/r Mitarbeiter/in im Projekt „KLIWA Vorsitz Hessen“ (m/w/d) (Wiesbaden) - Hessisches Landesamt für Naturschutz, Umwelt und Geologie (HLNUG)",
     "ts": "2026-06-18T10:02:40+00:00"
   },
+  "7d4a7d47681e3dcc": {
+    "pushed": true,
+    "score": 72,
+    "title": "Research Fellow (Urban Microclimate Modeling and Graph Neural ...",
+    "ts": "2026-06-18T20:21:55+00:00"
+  },
   "8f25826d520d9ad4": {
     "pushed": false,
     "score": 40,
     "title": "INITIATIVBEWERBUNG",
     "ts": "2026-06-18T10:02:40+00:00"
+  },
+  "92958aeb95c67ae4": {
+    "pushed": true,
+    "score": 82,
+    "title": "Research Fellow (Department of the Built Environment: 687256",
+    "ts": "2026-06-18T20:21:53+00:00"
+  },
+  "9a8a8046fb91b35b": {
+    "pushed": true,
+    "score": 90,
+    "title": "MSCA Postdoctoral Fellowship in Climate-Responsive Urban ...",
+    "ts": "2026-06-18T20:21:49+00:00"
+  },
+  "afed95a1cfdebfb8": {
+    "pushed": true,
+    "score": 85,
+    "title": "Research Group - Ying-Chieh Chan",
+    "ts": "2026-06-18T20:21:51+00:00"
+  },
+  "df1df63cb8c03af0": {
+    "pushed": false,
+    "score": 48,
+    "title": "Projektmitarbeiter (m/w/d) Klimaneutrale Gebäude (Berlin) - Deutsche Energie-Agentur GmbH (dena)",
+    "ts": "2026-06-18T20:21:58+00:00"
+  },
+  "f554cc93239dfee8": {
+    "pushed": true,
+    "score": 84,
+    "title": "Research Fellow (Department of the Built Environment) - Jobstreet",
+    "ts": "2026-06-18T20:21:52+00:00"
   }
 }
