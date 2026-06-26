@@ -125,9 +125,10 @@ Environment overrides (no code changes needed):
 | `MAX_LLM_CALLS`   | `120` | hard cap on API calls per run, **per track** (cost ceiling) |
 | `MAX_AGE_DAYS`    | `21` | drop postings older than this (when the post date is known) |
 | `SCORE_BATCH`     | `8`  | postings scored per LLM call |
-| `SCORING_MODEL` | `claude-opus-4-8` | niche-track scorer (precision) |
-| `EASY_SCORING_MODEL` | `claude-sonnet-4-6` | easy-track scorer (cheaper; high volume) |
-| `PREFILTER_MODEL` | `claude-haiku-4-5` | cheap first pass (both tracks) |
+| `SCORING_MODEL` | `deepseek-chat` | niche-track scorer (DeepSeek; a `claude-*` value routes to Anthropic) |
+| `EASY_SCORING_MODEL` | `deepseek-chat` | easy-track scorer |
+| `PREFILTER_MODEL` | `deepseek-chat` | cheap first pass + page enrichment (both tracks) |
+| `DEEPSEEK_API_KEY` | — | required when any model is `deepseek-*` (the default) |
 | `EASY_MIN_SCORE` / `EASY_MAYBE_MIN` | `50` / `35` | easy-track push / maybe thresholds |
 | `EASY_ENABLED`    | `1`  | set `0` to disable the easy track entirely |
 | `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | – | optional free [Adzuna](https://developer.adzuna.com/signup) key (extra easy-track volume); no-op if unset |
@@ -239,17 +240,16 @@ file; the scoring weights are `SCORING_INSTRUCTIONS`. Edit those to retune fit.
 
 ## Cost notes
 
-- **Steady-state ≈ $0.30/day (~$9/mo)** at the current recall-mode settings
-  (6×/day, both tracks). The dominant cost is scoring; the Haiku prefilter keeps
-  most volume off it, and `seen.json` means each run only scores postings that are
-  **new** since the last run — so it's a handful per run, not the whole backlog.
-  A first run (or a full `--dry-run`) scores the entire backlog and costs ~$1–2 once.
-- **Scoring is per track:** Opus on the niche track (precision), the cheaper Sonnet
-  on the high-volume easy track (`EASY_SCORING_MODEL`) — ~40% off with negligible
-  quality loss. The rubric is a **cached** system prompt; postings are **batched**.
-- **To spend less:** after the urgent job-search sprint, revert recall mode (cron
-  back to 4×/day, raise `MIN_FIT_SCORE`); or set `SCORING_MODEL=claude-sonnet-4-6`
-  for the niche track too. `MAX_LLM_CALLS` is a hard per-run ceiling either way.
+- **Steady-state ≈ ~$1/mo** on **DeepSeek** (`deepseek-chat` is the default scorer —
+  OpenAI-compatible JSON mode, ~10× cheaper than Anthropic, and strong at rubric
+  fit-scoring). `seen.json` means each run only scores postings that are **new**
+  since the last run — a handful per run, not the whole backlog.
+- **Provider is auto-routed by model name:** `deepseek-*` → DeepSeek (needs
+  `DEEPSEEK_API_KEY`); `claude-*` → Anthropic (needs `ANTHROPIC_API_KEY`). Set e.g.
+  `SCORING_MODEL=claude-opus-4-8` to put the niche track back on Opus for precision.
+- **To spend even less:** after the urgent job-search sprint, revert recall mode
+  (cron back to 4×/day, raise `MIN_FIT_SCORE`). `MAX_LLM_CALLS` is a hard per-run
+  ceiling regardless of provider.
 - Hard filters + the scam/freshness gate run **before** any LLM call, so junk
   never costs a token.
 

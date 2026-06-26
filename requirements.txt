@@ -1,5 +1,6 @@
 # Job-Monitor dependencies
-anthropic>=0.69.0      # Claude API (scoring) — structured outputs via output_config.format
+openai>=1.40.0         # DeepSeek scoring (OpenAI-compatible JSON mode) — default provider
+anthropic>=0.69.0      # optional fallback: Claude scoring (set *_MODEL=claude-* to use)
 requests>=2.31.0       # HTTP for sources + Telegram
 feedparser>=6.0.11     # robust RSS/Atom parsing (Tier A/B sources)
 beautifulsoup4>=4.12.0 # defensive HTML parsing (Tier D employer pages)

@@ -146,13 +146,14 @@ DEADLINE_WATCH_DAYS = _env_int("DEADLINE_WATCH_DAYS", 21)  # <= -> 🟠 bald bew
 DEADLINE_MAX_CALLS  = _env_int("DEADLINE_MAX_CALLS", 12)   # eigener LLM-Deckel für Deadline-Extraktion
 DEADLINE_PAGE_CHARS = _env_int("DEADLINE_PAGE_CHARS", 6000)  # wieviel Seitentext an die LLM geht
 
-# Scoring model is PER TRACK: Opus for the niche track (her real field — precision
-# matters, low volume) and the cheaper Sonnet for the high-volume easy track (a
-# bounded rubric fit-score is well within Sonnet's range). Cuts the dominant cost
-# ~40% with negligible quality loss where it matters least. Override per track.
-SCORING_MODEL      = os.environ.get("SCORING_MODEL", "claude-opus-4-8")        # niche track
-EASY_SCORING_MODEL = os.environ.get("EASY_SCORING_MODEL", "claude-sonnet-4-6")  # easy track
-PREFILTER_MODEL = os.environ.get("PREFILTER_MODEL", "claude-haiku-4-5")
+# LLM models (env-overridable, scoring is PER TRACK). Default is DeepSeek
+# (`deepseek-chat`, OpenAI-compatible, ~10x cheaper than Anthropic and strong at
+# rubric fit-scoring). A model name starting with 'claude' transparently routes
+# back to Anthropic instead (needs ANTHROPIC_API_KEY) — e.g. set
+# SCORING_MODEL=claude-opus-4-8 to put the niche track back on Opus for precision.
+SCORING_MODEL      = os.environ.get("SCORING_MODEL", "deepseek-chat")        # niche track
+EASY_SCORING_MODEL = os.environ.get("EASY_SCORING_MODEL", "deepseek-chat")   # easy track
+PREFILTER_MODEL = os.environ.get("PREFILTER_MODEL", "deepseek-chat")         # both tracks + enrichment
 
 CHECK_CRON      = "0 */4 * * *"                       # alle 4 Stunden (siehe workflow yml)
 
@@ -1588,11 +1589,11 @@ class NoCreditsError(RuntimeError):
 
 # Telegram alert pushed when scoring can't run because the API has no credits.
 NO_CREDITS_MESSAGE = (
-    "🚫 *No Jobs paused — Anthropic API out of credits*\n"
-    "Job scoring couldn't run: the Anthropic API credit balance is used up and "
-    "auto-reload is disabled.\n"
-    "➡️ Top up at https://console.anthropic.com/settings/billing — the monitor "
-    "resumes automatically on the next run once credits are added."
+    "🚫 *No Jobs paused — LLM API out of credits*\n"
+    "Job scoring couldn't run: the scoring API's balance is used up.\n"
+    "➡️ Top up DeepSeek (platform.deepseek.com) or, if running on Claude, "
+    "https://console.anthropic.com/settings/billing — the monitor resumes "
+    "automatically on the next run once the balance is restored."
 )
 
 
@@ -1605,9 +1606,34 @@ def _is_credit_error(exc: Exception) -> bool:
     return etype == "billing_error"
 
 
-def _anthropic_client():
-    import anthropic  # imported here so --test works without the dep installed
-    return anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+class LLM:
+    """Lazy multi-provider client bundle. _call_structured routes by model name:
+    a model starting with 'deepseek' goes to the OpenAI-compatible DeepSeek
+    endpoint (JSON mode); anything else goes to Anthropic. Clients init on first
+    use, so a single-provider run (or --test) never needs the other SDK/key."""
+
+    def __init__(self) -> None:
+        self._anthropic = None
+        self._openai = None
+
+    def anthropic(self):
+        if self._anthropic is None:
+            import anthropic  # lazy: a DeepSeek-only run needs no anthropic dep
+            self._anthropic = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+        return self._anthropic
+
+    def deepseek(self):
+        if self._openai is None:
+            from openai import OpenAI  # OpenAI-compatible client; talks to DeepSeek
+            self._openai = OpenAI(
+                api_key=os.environ.get("DEEPSEEK_API_KEY", "").strip(),
+                base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            )
+        return self._openai
+
+
+def make_llm() -> "LLM":
+    return LLM()
 
 
 _PREFILTER_SCHEMA = {
@@ -1678,10 +1704,13 @@ def _postings_block(postings: list[Posting]) -> str:
     return "\n".join(lines)
 
 
-def _call_structured(client, model: str, system: str, user: str, schema: dict) -> dict:
-    """One Messages API call constrained to a JSON schema. Returns parsed dict."""
+def _call_structured(client: "LLM", model: str, system: str, user: str, schema: dict) -> dict:
+    """One structured-JSON call, routed by model. 'deepseek*' -> OpenAI-compatible
+    JSON mode; otherwise Anthropic output_config schema. Returns parsed dict."""
+    if model.startswith("deepseek"):
+        return _call_deepseek(client, model, system, user, schema)
     try:
-        resp = client.messages.create(
+        resp = client.anthropic().messages.create(
             model=model,
             max_tokens=4000,
             system=[{
@@ -1699,6 +1728,32 @@ def _call_structured(client, model: str, system: str, user: str, schema: dict) -
         raise
     text = next((b.text for b in resp.content if b.type == "text"), "")
     return json.loads(text)
+
+
+def _call_deepseek(client: "LLM", model: str, system: str, user: str, schema: dict) -> dict:
+    """DeepSeek (OpenAI-compatible) structured call. DeepSeek has no strict
+    json_schema, so we ask for JSON-mode and pass the schema in the prompt, then
+    parse. The word 'json' must appear in the prompt for JSON mode to engage."""
+    sys = (system + "\n\nReturn ONLY a single valid JSON object — no markdown, no "
+           "prose — that conforms exactly to this JSON schema:\n" + json.dumps(schema))
+    try:
+        resp = client.deepseek().chat.completions.create(
+            model=model,
+            max_tokens=4000,
+            temperature=0,  # deterministic scoring
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception as exc:
+        # DeepSeek returns HTTP 402 "Insufficient Balance" when out of credits.
+        if _is_credit_error(exc):
+            raise NoCreditsError(str(getattr(exc, "message", "") or exc)) from exc
+        raise
+    text = (resp.choices[0].message.content or "").strip()
+    return json.loads(text or "{}")
 
 
 def prefilter(client, postings: list[Posting], budget: LLMBudget, track: "Track") -> list[Posting]:
@@ -2242,18 +2297,23 @@ def _location_ok(p: Posting, whitelist: set[str]) -> bool:
 # ──────────────────────────────────────────────────────────────────────────
 
 def run(dry_run: bool = False, only_track: str | None = None) -> int:
-    """Run all enabled tracks. The Anthropic client and the once-a-day digest
+    """Run all enabled tracks. The LLM client bundle and the once-a-day digest
     check are shared; each track keeps its own sources, LLM budget and state.
-    Returns 0 on success, 2 if the API key/client is missing, 3 if out of credits."""
+    Returns 0 on success, 2 if a required API key/client is missing, 3 if out of credits."""
     log.info("=== Job-Monitor run @ %s ===", _now())
 
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        log.error("ANTHROPIC_API_KEY not set — cannot score. Aborting (no state change).")
+    # Provider-aware key check: only require the key(s) the configured models need.
+    models = {PREFILTER_MODEL, SCORING_MODEL, EASY_SCORING_MODEL}
+    if any(m.startswith("deepseek") for m in models) and not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        log.error("DEEPSEEK_API_KEY not set — cannot score (models: %s). Aborting.", sorted(models))
+        return 2
+    if any(m.startswith("claude") for m in models) and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        log.error("ANTHROPIC_API_KEY not set — cannot score (models: %s). Aborting.", sorted(models))
         return 2
     try:
-        client = _anthropic_client()
+        client = make_llm()
     except Exception as exc:
-        log.error("Could not init Anthropic client: %s", exc)
+        log.error("Could not init LLM client: %s", exc)
         return 2
 
     # Is this a digest run? Twice daily (DIGEST_HOUR_UTC / _2) in recall mode, or forced.
