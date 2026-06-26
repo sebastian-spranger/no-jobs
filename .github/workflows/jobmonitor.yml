@@ -42,6 +42,9 @@ jobs:
 
       - name: Run job monitor
         env:
+          # DeepSeek is the default scoring provider (deepseek-chat) — required.
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          # Optional Anthropic fallback — only used if a *_MODEL is set to claude-*.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
