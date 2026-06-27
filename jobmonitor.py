@@ -230,11 +230,14 @@ STRETCH ROLES WITH A HOOK (surface ONLY with the hook NAMED in `reason`):
 - Technical / engineering recruiting (she reads engineer & researcher CVs natively).
 - Technical / scientific writing or science communication in her domain.
 
-OUT OF SCOPE (score LOW even if "climate" or "data" appears in the title):
+OUT OF SCOPE (score LOW even if "climate", "data", "simulation" or "engineer" appears):
+- GENERIC software / computer-science / data engineering / ROBOTICS / industrial /
+  mechanical / electronics / automotive engineering or simulation (she is NOT a software /
+  robotics / mechanical engineer — her simulation is BUILDINGS & cities, not machines/vehicles).
 - GENERIC data scientist / data analyst / business-intelligence / quantitative / market /
-  ECONOMIC / financial / controlling / accounting analyst, or generic software-engineering,
-  with NO building/climate/built-environment angle — she lacks SQL/BI/finance/economics and
-  would be screened out.
+  ECONOMIC / financial / controlling / accounting analyst, or generic "applied/research
+  scientist" / "geospatial-GIS analyst" / "customer enablement/success" with NO building/
+  climate/built-environment angle — she lacks SQL/BI/finance and would be screened out.
 - Academic PhD-student / fellowship roles, and pure-academic postdocs OUTSIDE Munich-or-
   remote — prefer INDUSTRY over yet-another-postdoc.
 - Roles needing fluent/native German, or German construction-trade / on-site Bau experience.
@@ -249,18 +252,23 @@ You score how well a single job posting fits the candidate above. Return a fit s
 
 Weighting:
 - BUILT-ENVIRONMENT / BUILDING-CLIMATE FIT (highest weight): building physics, thermal
-  comfort, climate-responsive design, building & energy simulation, sustainable/green
-  building, building performance, HVAC/façade/comfort engineering, smart-building/BMS,
+  comfort, climate-responsive design, BUILDING & ENERGY simulation (EnergyPlus/ENVI-met/
+  RayMan/DIALux — thermal/energy/daylight/microclimate of BUILDINGS & cities), sustainable/
+  green building, building performance, HVAC/façade/comfort engineering, smart-building/BMS,
   urban microclimate / climate-adaptation, or AI/ML for the BUILT ENVIRONMENT -> 80-100.
-- ADJACENT (score 50-75): physical-climate-RISK / climate-impact modelling she could do
+- ADJACENT (score 50-70): physical-climate-RISK / climate-impact modelling she could do
   with climate-science + Python (e.g. reinsurance), climate/sustainability roles with a
-  clear technical / built-environment angle, building-simulation-software vendor roles
-  (with the power-user hook named).
-- OUT (score 0-30): GENERIC data scientist / data analyst / BI / quantitative / market /
-  ECONOMIC / financial / controlling / accounting analyst, or generic software-engineering,
-  with NO building/climate/built-environment angle — she is a building scientist with
-  domain-specific Python/ML, NOT a generic data/finance analyst, and would be screened out.
-  Also OUT: PhD-student / intern; pure-academic postdoc outside Munich-or-remote.
+  clear built-environment angle, building-simulation-software vendor roles (hook named).
+- OUT (score 0-25) — score LOW even if the title says "simulation", "engineer", "scientist",
+  "modelling" or "AI": (a) generic SOFTWARE / COMPUTER-SCIENCE / data engineering / ROBOTICS /
+  industrial / mechanical / electronics / automotive engineering or simulation (e.g.
+  "industrial physics & robotics", CFD for vehicles, FEM for machines); (b) generic data
+  scientist / data analyst / BI / quantitative / market / ECONOMIC / financial / controlling /
+  accounting analyst; (c) generic "applied/research scientist", "geospatial/GIS analyst", or
+  "customer enablement/success" with NO building/climate/built-environment subject. She is a
+  BUILDING scientist with domain-specific Python/ML — NOT a software/robotics/industrial
+  engineer or generic data/finance analyst, and would be screened out. Also OUT: PhD-student
+  / intern; pure-academic postdoc outside Munich-or-remote.
 - LOCATION FIT: Munich/Bayern or genuine Germany-/EU-eligible remote -> ok; other German
   city / EU on-site, or US-only remote -> LOW.
 - LANGUAGE: English-working -> boost; fluent/native German required -> penalize (her
@@ -349,11 +357,12 @@ IN SCOPE (broad but REALISTIC — must match her actual strengths):
   customer-success / application engineer at a building-/climate-SIMULATION-SOFTWARE vendor
   (power-user); ESG/sustainability customer-success (her domain).
 
-OUT OF SCOPE (score LOW even with a nice title): GENERIC data scientist / data analyst /
-business-intelligence / quantitative / MARKET / ECONOMIC / financial / controlling /
-accounting analyst, generic sales/BD, HR/recruiting (no hook), UX-with-portfolio,
-clinical/CRA, SEO/marketing-content — she lacks SQL/BI/finance/economics and would be
-screened out fast.
+OUT OF SCOPE (score LOW even with a nice title): GENERIC software / computer-science / IT /
+data-engineering / ROBOTICS / mechanical / electronics / automotive engineering (she is not
+a software/robotics/mechanical engineer); GENERIC data scientist / data analyst / BI /
+quantitative / MARKET / ECONOMIC / financial / controlling / accounting analyst; generic
+sales/BD, HR/recruiting (no hook), UX-with-portfolio, clinical/CRA, SEO/marketing-content —
+she lacks SQL/BI/finance and the CS/engineering stack, and would be screened out fast.
 
 HARD CONSTRAINTS (this channel is strict):
 - LOCATION: MUNICH / Greater Munich / Bavaria on-site, OR genuine remote workable from
@@ -1616,6 +1625,8 @@ _JUNIOR_SENIOR_OVERRIDE = re.compile(r"\b(senior|lead|principal|head|chief)\b", 
 _UNRELATED = re.compile(
     r"\b(accountant|accounting|nursing|nurse|pflege|"
     r"marketing|frontend|backend|full[- ]?stack|devops|"
+    r"software engineer|software developer|softwareentwickler|"
+    r"robotic\w*|robotik\w*|embedded|firmware|"
     r"sap consultant|salesforce|tax advisor|lawyer|attorney|"
     r"warehouse|logistics driver|barista|waiter|kassierer|"
     r"außendienst|telesales|door.?to.?door)\b",
@@ -1677,6 +1688,7 @@ _EASY_UNSUITABLE = re.compile(
     r"nanny|babysit|au.?pair|erzieher|kinderbetreuung|"
     r"teamassistenz|team assistant|empfang|rezeption|receptionist|"
     r"nachhilfe\w*|tutor\w*|werkstudent|praktikant|praktikum|"
+    r"software engineer|software developer|softwareentwickler|robotic\w*|robotik\w*|embedded|firmware|"
     r"aushilfe|minijob|450.?euro|520.?euro)\b",
     re.I,
 )
