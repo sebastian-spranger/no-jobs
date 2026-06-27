@@ -46,6 +46,7 @@ import os
 import re
 import sys
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -126,7 +127,7 @@ LOCATIONS = [
     "remote", "EU remote", "remote Germany", "hybrid Munich",
 ]
 
-MAX_LLM_CALLS   = _env_int("MAX_LLM_CALLS", 120)     # Kostendeckel pro Lauf, PRO Track (mehr Quellen)
+MAX_LLM_CALLS   = _env_int("MAX_LLM_CALLS", 150)     # Kostendeckel pro Lauf, PRO Track (breiterer Scope)
 SCORE_BATCH     = _env_int("SCORE_BATCH", 8)         # Postings pro LLM-Call (Batching senkt Kosten)
 
 # Freshness gate: drop postings whose KNOWN posting date is older than this many
@@ -190,59 +191,83 @@ MAX_ITEMS_PER_SOURCE = _env_int("MAX_ITEMS_PER_SOURCE", 300)
 # ──────────────────────────────────────────────────────────────────────────
 
 CANDIDATE_RUBRIC = """\
-CANDIDATE: Dr. Sevil Zafarmandi — Humboldt Research Fellow / Postdoctoral Researcher.
+CANDIDATE: Dr. Sevil Zafarmandi — Dr.-Ing. (PhD). Currently postdoc at TU München
+(host: Dipl.-Ing. Thomas Auer, founder of Transsolar) & Univ. Freiburg (Prof.
+Matzarakis). Contract ends ~2026-07-24 — she needs an INDUSTRY or senior-research
+role within weeks and is deliberately moving OUT of academia into applied work.
 
-Current: TU München, School of Engineering and Design (host: Dipl.-Ing. Thomas Auer,
-founder of Transsolar). Also Chair of Environmental Meteorology, University of Freiburg
-(Prof. Andreas Matzarakis). PhD in Architecture (Tarbiat Modares University, Tehran);
-background in passive cooling, modern windcatchers, on-site microclimate field measurements.
+EMPLOYABLE NICHE (what to surface — broader than her PhD thesis topic): real
+professional roles at the intersection of CLIMATE / SUSTAINABILITY / ENERGY + DATA
+SCIENCE / AI / STATISTICAL MODELING + SIMULATION + CONSULTING, in industry OR senior
+research (NOT PhD-student / intern / Werkstudent). Concretely in scope:
+- Climate / energy / sustainability DATA SCIENTIST or ANALYST; ML / analytics engineer.
+- ESG / decarbonisation / carbon-accounting / CSRD analyst or specialist.
+- Climate-risk / NatCat / catastrophe analytics (e.g. reinsurance — Munich is the hub).
+- Building- / urban-climate SIMULATION & energy-modelling engineer.
+- GIS / geospatial / remote-sensing / earth-observation analyst.
+- Sustainability / climate CONSULTANT; research scientist at a climate institute / impact org.
 
-CORE EXPERTISE / NICHE:
-- Outdoor & semi-outdoor THERMAL COMFORT; thermal comfort indices (PET, UTCI, mPET),
-  clothing insulation in urban settings.
-- Urban biometeorology / environmental meteorology / urban microclimate.
-- Urban heat island, heat resilience, climate-responsive urban design, climate adaptation,
-  livability, public-health-oriented urban environments.
-- Sustainable architecture / sustainable building, building physics (Bauphysik), green
-  building (DGNB/LEED), facade & comfort engineering.
-- AI / data-driven methods applied to the built environment & thermal comfort.
-- Microclimate simulation tooling (ENVI-met, RayMan, SkyHelios), field measurement
-  campaigns, statistical / data analysis.
+DEEP DOMAIN (a PLUS, NOT required): outdoor/semi-outdoor THERMAL COMFORT (PET, UTCI,
+mPET), urban biometeorology / microclimate, urban heat & climate adaptation, sustainable
+building / building physics (Bauphysik, DGNB/LEED), AI for the built environment.
+Power-user of ENVI-met, RayMan, SkyHelios (familiar with EnergyPlus/IES/DesignBuilder).
+Strong Python, R, SQL, ML, statistics, scientific modeling, GIS. A climate-data-scientist
+/ energy-modelling role with NO thermal-comfort angle is FULLY in scope and should score
+high — deep-domain overlap is a bonus on top, never a gate.
 
-LANGUAGES: English (research language); Persian (native); German likely limited — PREFER
-English-language roles and FLAG German-required ones (do not auto-discard them).
+STRETCH ROLES WITH A HOOK (surface ONLY when a genuine personal hook applies, and NAME
+the hook in `reason`): pre-sales / solutions / customer-success / application engineer at
+a building-/climate-SIMULATION-SOFTWARE vendor (she is a power-user of those tools);
+technical / engineering RECRUITING (she reads engineer & researcher CVs natively and has
+a top one). Do NOT surface generic sales / recruiting / HR with no hook.
 
-LOCATION PREFERENCE: Munich / Greater Munich / Bayern, OR fully remote. Also OK: hybrid
-roles reachable from Munich, and remote-from-Germany / remote-within-EU roles.
+LANGUAGES: English FLUENT (works in English); Persian native; German only B2 (NOT
+fluent/native). PENALISE roles needing fluent/native German (customer-facing public-
+sector, legal, HR, heavy German writing) and German construction-industry / Baugewerbe
+roles (she has never worked in DE construction). FLAG, don't always discard.
 
-CAREER INTERESTS: postdoc / research scientist roles AND industry roles (sustainability /
-climate consultancies, building-climate engineering, urban climate analytics). Both
-academia and industry are in scope. She already has a PhD — PhD-student / intern roles are
-NOT a fit unless explicitly senior.
+LOCATION (hard): Munich / Greater Munich on-site or hybrid, OR genuine Germany-/EU-
+eligible REMOTE. NOT US-only remote; NOT other-German-city / EU on-site.
+
+PAY: aim for >= EUR 3.5k NET/month (~EUR 70-75k gross/yr in DE). Penalise clearly junior
+/ below-floor roles. SENIORITY: she fits mid/senior IC & consultant roles; mild
+overqualification is fine, but clearly-junior roles raise overqualification/flight-risk.
 """
 
 SCORING_INSTRUCTIONS = """\
 You score how well a single job posting fits the candidate above. Return a fit score 0-100.
 
 Weighting:
-- DOMAIN OVERLAP (highest weight): thermal comfort, urban climate/microclimate,
-  biometeorology, climate-responsive/sustainable architecture, building physics, urban
-  heat/resilience, climate adaptation. A posting deep in her niche -> 80-100.
-- SENIORITY FIT: postdoc, research associate/scientist, senior consultant, specialist,
-  lead -> good. Pure PhD-student / intern / Werkstudent -> score low (she has a PhD)
-  unless explicitly senior.
-- LOCATION FIT: Munich/Bayern, remote, or remote-from-EU -> boost; on-site elsewhere in
-  Germany -> neutral; on-site outside reachable range with no remote option -> penalize.
-- LANGUAGE: English-friendly -> boost; "fließend Deutsch / German native required" ->
-  penalize, but still surface if domain fit is very high.
+- EMPLOYABLE-NICHE FIT (highest weight): climate / sustainability / energy + data-science
+  / AI / modeling / consulting, in industry or senior research. A clear fit -> 70-100.
+  DEEP-DOMAIN overlap (thermal comfort, urban microclimate, building physics, climate
+  adaptation) is a strong BONUS on top — but its ABSENCE is NOT a penalty if the role is
+  otherwise in her employable niche (a climate data scientist with no thermal angle = high).
+- REALISTIC CHANCE / SENIORITY: reward roles where she is correctly-qualified or only
+  mildly overqualified. Pure PhD-student / intern / Werkstudent -> low. Severely-junior or
+  clearly-below-pay-floor roles -> low (overqualification / flight-risk).
+- LOCATION FIT: Munich/Bayern or genuine Germany-/EU-eligible remote -> boost; other
+  German city / EU on-site, or US-only remote -> penalize.
+- LANGUAGE: English-working -> boost; fluent/native German required -> penalize (her
+  German is B2), but still surface if niche fit is very high.
+- PAY: aim >= EUR 3.5k net/mo (~EUR 70-75k gross/yr DE); clearly low-paid -> penalize.
 
-Be calibrated and strict: most general postings should score low. Reserve 70+ for genuine
-domain matches. Optimize for precision — a high score should mean she'd genuinely want the ping.
+STRETCH-WITH-A-HOOK: a role outside her proven skills BUT where she has one genuine hook
+— pre-sales / solutions / customer-success / application-engineer at a building-/climate-
+SIMULATION-SOFTWARE vendor (she's a power-user of the tools), or technical / engineering
+recruiting (she reads engineer/researcher CVs) — score 45-65 and STATE THE HOOK in
+`reason`. Generic sales / recruiting / HR with no hook -> low.
+
+Be calibrated. Reserve 70+ for genuine employable-niche fits she could realistically land
+that are Munich/remote and English-doable. (Recall mode while she job-hunts.)
 
 For each posting return:
   score          : integer 0-100
-  reason         : ONE short line (max ~18 words) saying why it fits or doesn't
-  location_fit   : one of "munich", "remote", "germany", "eu", "elsewhere", "unknown"
+  reason         : ONE short line (max ~18 words); for a stretch role, NAME the hook
+  location_fit   : one of "munich", "remote", "germany", "eu", "elsewhere", "unknown".
+                   Use "remote" ONLY for Germany-/EU-eligible remote; use "elsewhere" for
+                   US-only / non-EU-eligible remote (e.g. "must be authorized to work in
+                   the US", US-only, US time zones) EVEN IF the role is remote.
   language_flag  : one of "english", "german_required", "unknown"
   work_mode      : one of "remote", "hybrid", "onsite", "unknown"
                    (remote = fully remote/home-office; hybrid = partly on-site;
@@ -262,10 +287,12 @@ ANTI-SCAM / REALISM (hard down-weight):
 
 # Coarse first-pass instructions for the Haiku prefilter (the niche track).
 MAIN_PREFILTER_INSTRUCTIONS = (
-    "Quickly rate each posting's RELEVANCE to the candidate's domain on 0-100 "
-    "(domain overlap + seniority). This is a coarse first pass — be generous to "
-    "anything plausibly in-domain, harsh on clearly off-topic roles. "
-    "Return only id and score for each."
+    "Quickly rate each posting's RELEVANCE to her EMPLOYABLE niche on 0-100 — climate / "
+    "sustainability / energy + data-science / AI / modeling / simulation / consulting "
+    "(industry or senior research), NOT just her thermal-comfort thesis topic. This is a "
+    "coarse first pass — be generous to anything plausibly in that employable niche "
+    "(incl. data scientist/analyst, ESG, climate-risk, energy/GIS roles), harsh on "
+    "clearly off-topic roles. Return only id and score for each."
 )
 
 
@@ -274,67 +301,78 @@ MAIN_PREFILTER_INSTRUCTIONS = (
 # jobs she could land QUICKLY and EASILY, strictly in Munich or fully remote.
 EASY_RUBRIC = """\
 CANDIDATE (same person, different lens): Dr. Sevil Zafarmandi — PhD, postdoctoral
-researcher. Fluent ENGLISH (research language), native Persian, LIMITED German.
-Transferable skills: research & analysis, statistics / data analysis, scientific &
-technical writing/editing, simulation & modelling tools, spatial / GIS-style analysis,
-sustainability & climate domain knowledge, teaching & presenting, project work.
+researcher. Fluent ENGLISH, native Persian, German only B2 (NOT fluent). Strong
+transferable skills: research & analysis, statistics / data analysis, Python/R/SQL/ML,
+scientific & technical writing, simulation & GIS tools, sustainability & climate domain
+knowledge, project work. Never worked in the German construction industry.
 
-GOAL OF THIS CHANNEL ("easy track"): surface jobs she could realistically land
-QUICKLY and EASILY — roles where she is clearly qualified or OVERqualified, the barrier
-to entry is low, hiring is fast, and the pay is DECENT (a solid professional salary, not
-minimum wage, not unpaid). These need NOT be in her research niche. Think: a reliable,
-well-paid paycheck she can get soon.
+GOAL OF THIS CHANNEL ("easy track"): surface jobs OUTSIDE her research niche that she
+could realistically land FAST — where she is clearly qualified/OVERqualified (or has a
+genuine personal hook), the barrier is low, AND the pay is solid. The bar is "a reliable,
+well-paid job she can ACTUALLY get soon", NOT "any job".
 
-IN SCOPE (broad):
+IN SCOPE (broad, but realistic):
 - Adjacent professional roles leveraging her PhD/English: sustainability/ESG/climate
-  analyst or consultant, research assistant/associate (NOT PhD-student), data/GIS/
-  quantitative analyst, technical or scientific writer/editor, environmental consulting,
-  university/research-institute staff or coordinator, lab/project coordinator.
-- Broad decently-paid English-friendly office roles she could plausibly get fast even
-  outside her field: analysis, coordination, operations, program/project support,
-  knowledge work, customer success (English).
-- Flexible / quick-start work: English teaching/tutoring, part-time research, freelance
-  analysis, proofreading/editing in English.
+  analyst or consultant, data/GIS/quantitative analyst, research associate (NOT
+  PhD-student), project/operations/program coordinator or manager, university/research-
+  institute staff, technical/scientific writer WITH a portfolio.
+- Broad decently-paid English-friendly office roles she could get fast even outside her
+  field: analysis, coordination, operations, program/project management, knowledge work.
+- STRETCH ROLES WITH A HOOK (only when a genuine hook applies, and NAME it): technical /
+  engineering recruiting (she reads engineer & researcher CVs natively and has a top one);
+  pre-sales / solutions / customer-success / application engineer at a building-/climate-
+  SIMULATION-SOFTWARE vendor (she is a power-user of those tools); ESG/sustainability
+  customer-success (her domain). Generic sales / recruiting / HR with NO hook is OUT.
 
 HARD CONSTRAINTS (this channel is strict):
-- LOCATION: MUNICH / Greater Munich / Bavaria on-site, OR FULLY REMOTE only. Anything
-  else (other German city on-site, EU on-site, hybrid tied to another city) is OUT.
-- LANGUAGE: must be doable with English / limited German. Roles requiring fluent or
-  native German score LOW.
-- PAY & LEVEL: decently-paid professional work only. Internships, Werkstudent,
-  Ausbildung, unpaid, or low-wage manual/service jobs are OUT.
-- EASE: favour low-barrier, fast-hiring roles; penalise ones needing niche
-  certifications/licences she lacks (e.g. German-bar lawyer, medical licence).
+- LOCATION: MUNICH / Greater Munich / Bavaria on-site, OR genuine remote workable from
+  Germany. Other German city on-site, EU/US on-site, US-only remote, or hybrid tied to
+  another city -> OUT.
+- PAY & LEVEL: must plausibly pay >= EUR 3,500 NET/month (~EUR 70-75k gross/yr), FULL-TIME.
+  Internships, Werkstudent, Ausbildung, part-time, hourly / freelance day-rate, student
+  co-ops, unpaid, low-wage manual/service, and admin-assistant / Teamassistenz / reception
+  roles are OUT (cannot reach the floor).
+- LANGUAGE: doable with English / B2 German. Roles needing fluent/native German
+  (customer-facing public-sector, legal, HR, heavy German writing) -> LOW.
+- REALISTIC CHANCE: she must have a genuine shot. Roles needing skills she can't prove
+  fast (pure sales/BD, recruiting/HR, UX-with-portfolio, clinical/CRA, content/SEO
+  writing, a specific German licence/cert) -> LOW, UNLESS a stated hook applies.
 """
 
 EASY_SCORING_INSTRUCTIONS = """\
-You score how well a single job posting fits the "easy, quick-to-land, decently-paid,
-Munich-or-remote" goal above. Return a fit score 0-100.
+You score how well a single job posting fits the "easy, quick-to-land, SOLIDLY-paid,
+Munich-or-remote, realistic-chance" goal above. Return a fit score 0-100.
 
 Weighting:
-- EASE OF LANDING (highest weight): is she clearly qualified or OVERqualified, with a low
-  barrier and fast hiring? -> high. Needs skills/licences she lacks, or is highly
-  competitive -> low.
-- LOCATION (hard gate): Munich/Bavaria on-site OR fully remote -> ok; anything else -> LOW.
-- LANGUAGE (hard gate): English-doable / limited-German ok -> ok; fluent/native German
+- REALISTIC CHANCE OF LANDING (highest weight): is she clearly qualified/OVERqualified, or
+  does she have a stated genuine hook, with a low barrier and fast hiring? -> high. Needs
+  skills/licences/experience she lacks (pure sales/BD, recruiting/HR, UX-portfolio,
+  clinical/CRA, content/SEO writing, a German cert) with NO hook -> LOW.
+- LOCATION (hard gate): Munich/Bavaria on-site OR genuine Germany-eligible remote -> ok;
+  other German city / EU on-site / US-only remote -> LOW.
+- PAY & LEVEL (hard gate): must plausibly clear EUR 3,500 net/mo (~EUR 70-75k gross/yr),
+  FULL-TIME. Intern/Werkstudent/part-time/hourly/freelance-day-rate/student-coop/low-wage
+  manual/service/admin-assistant/reception -> LOW (cannot reach the floor).
+- LANGUAGE (hard gate): English-doable / B2-German ok -> ok; fluent/native German
   required -> LOW.
-- PAY & LEVEL: decently-paid professional role -> ok; intern/Werkstudent/low-wage
-  manual/service -> LOW.
 
-Be calibrated: reserve 70+ for roles she could genuinely land quickly AND that pay
-decently AND are in Munich or remote. A high score should mean "she could realistically
-have this job soon." (Thresholds are in recall mode while she job-hunts — surface
-plausible real roles; the hard constraints below keep out the truly unsuitable.)
+STRETCH-WITH-A-HOOK: a role outside her proven skills BUT where she has one genuine hook —
+technical/engineering recruiting (she reads engineer/researcher CVs), or pre-sales /
+solutions / customer-success / application-engineer at a building-/climate-SIMULATION-
+SOFTWARE vendor (she's a power-user), or ESG/sustainability customer-success (her domain) —
+score 45-65 and STATE THE HOOK in `reason`. Generic sales/recruiting/HR with no hook -> low.
+
+Be calibrated: reserve 70+ for roles she could genuinely land quickly AND that clear the
+pay floor AND are Munich/remote AND English-doable. A high score should mean "she could
+realistically have this solid job soon." (Recall mode while she job-hunts.)
 
 QUALIFICATION & LANGUAGE REALISM (this channel is about getting hired FAST):
 - Penalize roles whose hard requirements she lacks: fluent/native GERMAN (C1/C2,
-  "verhandlungssicher", "muttersprachlich"), or a German licence/qualification she does
-  not hold (German-bar lawyer, Approbation/medical licence, Steuerberater, German-specific
-  certifications, security clearance). These make a fast hire unrealistic -> score LOW.
-- Strongly reward English-working-language roles and roles explicitly open to
-  limited-German / international candidates.
-- Treat decent professional PAY and FAST/low-barrier hiring as positives; treat "highly
-  competitive" / "many years German-market experience required" as negatives here.
+  "verhandlungssicher", "muttersprachlich"), a German licence/qualification she lacks
+  (German-bar lawyer, Approbation/medical licence, Steuerberater, security clearance), or a
+  skills track she has no evidence for -> score LOW.
+- Strongly reward English-working-language roles open to international / limited-German
+  candidates, and roles that leverage her PhD/quant/research/sustainability strengths.
 
 ANTI-SCAM / REALISM (hard down-weight):
 - Lead-gen / fast-money signals ("work from home, earn €X/day, no experience needed,
@@ -344,7 +382,9 @@ ANTI-SCAM / REALISM (hard down-weight):
   "description" -> score 0-10. Reward named real employers with a direct apply link.
 
 For each posting return the SAME fields as the other rubric:
-  score, reason (one short line), location_fit, language_flag, work_mode.
+  score, reason (one short line; for a stretch role NAME the hook), location_fit,
+  language_flag, work_mode. For location_fit use "elsewhere" for US-only / non-EU-eligible
+  remote (e.g. "must be authorized to work in the US", US-only, US time zones) EVEN IF remote.
 """
 
 EASY_PREFILTER_INSTRUCTIONS = (
@@ -400,9 +440,10 @@ SOURCES: list[dict[str, Any]] = [
         "name": "academics.de",
         "tier": "A",
         "type": "academics",
+        # Mix: a few employable-niche/industry-adjacent terms + her deep-domain terms.
         "queries": [
-            "Stadtklima", "thermischer Komfort", "Bauphysik", "Klimaanpassung",
-            "Mikroklima", "urban climate", "nachhaltiges Bauen", "Umweltmeteorologie",
+            "Data Scientist", "Nachhaltigkeit", "Klimadaten", "Energiesystemanalyse",
+            "Stadtklima", "Klimaanpassung", "urban climate", "Umweltdaten",
         ],
         "verified": True,
     },
@@ -414,9 +455,12 @@ SOURCES: list[dict[str, Any]] = [
         "name": "Arbeitsagentur (niche)",
         "tier": "A",
         "type": "bundesagentur",
+        # Retargeted to industry climate/sustainability/energy + data terms (was
+        # Stadtklima/Bauphysik only — missed Munich Re, utilities, consultancies).
         "queries": [
-            "Stadtklima", "Klimatologie", "Meteorologie", "Bauphysik",
-            "Stadtplanung", "Geoinformation", "Umweltwissenschaft", "Klimaanpassung",
+            "Data Scientist", "Datenanalyst", "Klimadaten", "Nachhaltigkeit",
+            "ESG", "Energiedatenanalyse", "Energiesystemanalyse", "Klimarisiko",
+            "Geoinformatik", "Dekarbonisierung", "Nachhaltigkeitsberater", "Klimaanpassung",
         ],
         "veroeffentlichtseit": 14,
         "verified": True,
@@ -463,13 +507,21 @@ SOURCES: list[dict[str, Any]] = [
         # Each surfaces her niche across EURAXESS / Nature / university boards;
         # junk domains are filtered and the LLM scores the rest. (Verified live:
         # returns MSCA fellowships, urban-microclimate postdocs, urban-heat PhDs.)
+        # Retargeted to her EMPLOYABLE niche (industry climate/energy + data roles),
+        # Munich + remote-Germany/EU; the location gate keeps only Munich/remote.
         "queries": [
-            "outdoor thermal comfort postdoc position",
-            "urban microclimate researcher university vacancy",
-            "urban heat climate adaptation postdoc",
-            "urban climate modelling research position",
-            "Stadtklima wissenschaftlicher Mitarbeiter Universität",
-            "Bauphysik thermischer Komfort Postdoc Stelle",
+            "climate data scientist Munich",
+            "climate data scientist remote Germany",
+            "sustainability data analyst Munich English",
+            "ESG data analyst remote Europe",
+            "energy data scientist remote Germany",
+            "decarbonisation analyst remote Germany",
+            "climate risk analytics Munich",
+            "carbon accounting analyst remote Europe",
+            "geospatial analyst climate remote Germany",
+            "building energy simulation engineer Munich",
+            "sustainability consultant Munich English",
+            "climate tech data scientist remote Europe",
         ],
         "verified": True,
     },
@@ -494,6 +546,19 @@ SOURCES: list[dict[str, Any]] = [
             'Juniorprofessur OR fellowship)'
         ),
         "verified": False,
+    },
+    # ---- Tier C: Personio ATS feeds of named climate/energy employers ----
+    # Free XML feed per company (verified live 2026-06-27). These are exactly her
+    # employable-niche employers; the location gate keeps Munich/remote.
+    {
+        "name": "Personio (climate/energy employers)",
+        "tier": "C",
+        "type": "personio",
+        "companies": [
+            "tanso", "climate", "tado", "reev", "instagrid",
+            "twaice", "circuly", "reverion", "pina", "codegaia",
+        ],
+        "verified": True,
     },
     # ---- Tier D: employer career pages (HTML, generic parser) ----
     # Intentionally defensive: the generic HTML parser extracts anchor links
@@ -1420,6 +1485,44 @@ def _too_old(p: Posting) -> bool:
     return age > MAX_AGE_DAYS
 
 
+def fetch_personio(src: dict[str, Any]) -> list[Posting]:
+    """Personio recruiting XML feed (https://{slug}.jobs.personio.de/xml) — free, no
+    key. Used by many German climate/energy/sustainability employers; one feed per
+    company slug, fail-open per company. English-clean, fresh (createdAt dates)."""
+    postings: list[Posting] = []
+    for slug in src.get("companies", []):
+        url = f"https://{slug}.jobs.personio.de/xml"
+        try:
+            resp = _http_get(url)
+            root = ET.fromstring(resp.content)
+        except Exception as exc:
+            log.warning("  personio: %s failed (%s)", slug, exc)
+            continue
+        for pos in root.findall("position"):
+            def g(tag: str) -> str:
+                el = pos.find(tag)
+                return (el.text or "").strip() if el is not None and el.text else ""
+            pid, title = g("id"), html.unescape(g("name"))
+            if not pid or not title:
+                continue
+            desc_el = pos.find("jobDescriptions")
+            desc = " ".join(desc_el.itertext()) if desc_el is not None else ""
+            schedule = g("schedule") or g("recruitingCategory")
+            postings.append(Posting(
+                title=title[:200],
+                employer=html.unescape(g("subcompany") or g("company") or slug),
+                location=g("office") or "—",
+                url=f"https://{slug}.jobs.personio.de/job/{pid}?language=en",
+                source=src["name"],
+                snippet=_clean_text(f"{g('department')} · {schedule} · {desc}"),
+                date=g("createdAt")[:10],
+            ))
+            if len(postings) >= MAX_ITEMS_PER_SOURCE:
+                return postings
+        time.sleep(0.2)
+    return postings
+
+
 def gather(sources: list[dict[str, Any]] | None = None) -> list[Posting]:
     """Run every source in `sources` (default SOURCES); failures logged & skipped.
     Drops scam/junk and stale postings per source before they reach the pipeline."""
@@ -1431,6 +1534,7 @@ def gather(sources: list[dict[str, Any]] | None = None) -> list[Posting]:
         "nature": fetch_nature, "jobs_ac_uk": fetch_jobs_ac_uk,
         "himalayas": fetch_himalayas, "arbeitnow": fetch_arbeitnow,
         "jobicy": fetch_jobicy, "adzuna": fetch_adzuna,
+        "personio": fetch_personio,
     }
     all_postings: list[Posting] = []
     for src in sources:
@@ -1472,11 +1576,15 @@ _JUNIOR = re.compile(
 _JUNIOR_SENIOR_OVERRIDE = re.compile(r"\b(senior|lead|principal|head|chief)\b", re.I)
 
 # Clearly unrelated fields.
+# NOTE: bare "sales"/"vertrieb"/"recruiter" are intentionally NOT dropped — pre-sales /
+# solutions / customer-success and technical recruiting are "stretch-with-a-hook" roles
+# the LLM scores on the hook. Only unambiguous cold-sales tokens are hard-dropped here.
 _UNRELATED = re.compile(
-    r"\b(sales|vertrieb|accountant|accounting|nursing|nurse|pflege|"
-    r"recruiter|marketing|frontend|backend|full[- ]?stack|devops|"
+    r"\b(accountant|accounting|nursing|nurse|pflege|"
+    r"marketing|frontend|backend|full[- ]?stack|devops|"
     r"sap consultant|salesforce|tax advisor|lawyer|attorney|"
-    r"warehouse|logistics driver|barista|waiter|kassierer)\b",
+    r"warehouse|logistics driver|barista|waiter|kassierer|"
+    r"außendienst|telesales|door.?to.?door)\b",
     re.I,
 )
 
@@ -1484,7 +1592,9 @@ _UNRELATED = re.compile(
 # posting as low-prior (still allowed through to the cheap prefilter, but this
 # helps the prefilter and gives us a free skip for totally off-topic items).
 _DOMAIN = re.compile(
-    r"\b(thermal comfort|thermischer komfort|thermische behaglichkeit|"
+    r"\b("
+    # --- deep niche (her edge) ---
+    r"thermal comfort|thermischer komfort|thermische behaglichkeit|"
     r"biometeorolog|microclimate|mikroklima|"
     r"urban climate|stadtklima|urban heat|hitze|heat island|wärmeinsel|"
     r"climate adaptation|klimaanpassung|klimaschutz|"
@@ -1497,7 +1607,27 @@ _DOMAIN = re.compile(
     r"pet|utci|envi-?met|rayman|skyhelios|"
     r"comfort engineering|livability|resilien|"
     r"outdoor comfort|wind comfort|solar radiation|"
-    r"raumklima|innenraumklima|gebäudeklimatik)\b",
+    r"raumklima|innenraumklima|gebäudeklimatik|"
+    # --- employable niche: climate/sustainability/energy + data/AI/modeling ---
+    r"climate data|climate scientist|climate risk|climate analytics|climate tech|climate impact|"
+    r"catastrophe model|cat model|nat.?cat|natural catastrophe|risk analytics|"
+    r"sustainab|nachhaltigkeitsmanager|nachhaltigkeitsberater|"
+    r"esg|decarboni[sz]|dekarbonisierung|net.?zero|"
+    r"carbon account|carbon footprint|co2.?bilanz|ghg|greenhouse gas|treibhausgas|scope 3|"
+    r"energy data|energiedaten|energy model|energiemodell|energy system|energiesystem|"
+    r"energy analyst|energy analytics|energiewende|renewable|erneuerbare|photovolta|"
+    r"load forecast|"
+    r"geospatial|geodaten|remote sensing|fernerkundung|earth observation|satellite data|"
+    r"gis analyst|spatial analy|geoinformati|"
+    r"life cycle assessment|lebenszyklusanalyse|lca|ökobilanz|"
+    r"data scientist|data analyst|datenanalyst|machine learning|ml engineer|ai engineer|"
+    r"applied scientist|research scientist|quantitative analyst|"
+    r"simulation engineer|energy simulation|building simulation|thermal simulation|"
+    r"energyplus|designbuilder|ladybug|"
+    # --- stretch-with-hook (sim-software vendor / technical) ---
+    r"application engineer|pre.?sales|presales|solutions engineer|customer success|"
+    r"technical consultant|implementation consultant"
+    r")\b",
     re.I,
 )
 
@@ -1516,6 +1646,8 @@ _EASY_UNSUITABLE = re.compile(
     r"cashier|kassierer|verkäufer|verkaeufer|retail associate|shop assistant|"
     r"friseur|hairdresser|kosmetik|"
     r"nanny|babysit|au.?pair|erzieher|kinderbetreuung|"
+    r"teamassistenz|team assistant|empfang|rezeption|receptionist|"
+    r"nachhilfe\w*|tutor\w*|werkstudent|praktikant|praktikum|"
     r"aushilfe|minijob|450.?euro|520.?euro)\b",
     re.I,
 )
@@ -1914,9 +2046,11 @@ def enrich_details(client, postings: list[Posting], budget: LLMBudget) -> None:
         '  language: "english" if the work language is English or the posting says English '
         'is sufficient; "german_required" if fluent/native German is required; "unknown" if unclear.\n'
         '  location_fit: relative to the Munich candidate — "munich" if the workplace is '
-        'Munich/Greater Munich/Bavaria; "remote" if fully remote (workable from Munich); '
-        '"germany" if elsewhere in Germany on-site; "eu" if elsewhere in the EU on-site; '
-        '"elsewhere" if outside the EU on-site; "unknown" if unclear.\n'
+        'Munich/Greater Munich/Bavaria; "remote" if fully remote AND workable from '
+        'Germany/EU; "germany" if elsewhere in Germany on-site; "eu" if elsewhere in the EU '
+        'on-site; "elsewhere" if outside the EU on-site OR if remote but US-only / not '
+        'EU-eligible (e.g. "must be authorized to work in the US", US-only, US time zones); '
+        '"unknown" if unclear.\n'
         "Do not guess — use \"unknown\" when the page does not say. Output only these fields."
     )
     pages: list[dict[str, str]] = []
@@ -2250,7 +2384,7 @@ MAIN_TRACK = Track(
     max_llm_calls=MAX_LLM_CALLS,
     require_domain=True,
     unrelated_re=_UNRELATED,
-    location_whitelist=None,
+    location_whitelist={"munich", "remote"},  # Munich-or-remote gate (was None — leaked other cities)
     tag="",
     digest_title="🗓 Tages-Übersicht — Top {n} aktuelle Stellen",
     digest_subtitle="Das Beste, was die Quellen gerade hergeben (auch unter der Ping-Schwelle):",
@@ -2285,10 +2419,12 @@ TRACKS: list[Track] = [MAIN_TRACK, EASY_TRACK]
 
 
 def _location_ok(p: Posting, whitelist: set[str]) -> bool:
-    """Easy track gate: keep only Munich-area / remote roles. A fully-remote
-    work_mode qualifies regardless of where the employer sits (she works from Munich)."""
+    """Location gate (both tracks): keep only Munich-area / Germany-or-EU-eligible-remote
+    roles. A fully-remote role qualifies regardless of employer location (she works from
+    Munich) — UNLESS it is US-only / non-EU-eligible remote, which the scorer/enricher tags
+    location_fit="elsewhere"; those are excluded so US-only remote no longer slips through."""
     if p.work_mode == "remote":
-        return True
+        return p.location_fit != "elsewhere"
     return p.location_fit in whitelist
 
 
