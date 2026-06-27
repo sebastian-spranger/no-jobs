@@ -191,75 +191,91 @@ MAX_ITEMS_PER_SOURCE = _env_int("MAX_ITEMS_PER_SOURCE", 300)
 # ──────────────────────────────────────────────────────────────────────────
 
 CANDIDATE_RUBRIC = """\
-CANDIDATE: Dr. Sevil Zafarmandi — Dr.-Ing. (PhD). Currently postdoc at TU München
-(host: Dipl.-Ing. Thomas Auer, founder of Transsolar) & Univ. Freiburg (Prof.
-Matzarakis). Contract ends ~2026-07-24 — she needs an INDUSTRY or senior-research
-role within weeks and is deliberately moving OUT of academia into applied work.
+CANDIDATE: Dr.-Ing. Sevil Zafarmandi — ARCHITECT & BUILDING SCIENTIST. Currently postdoc
+at TU München (Chair of Building Technology and Climate-Responsive Design; chair holder
+Prof. Thomas Auer, a Transsolar partner); previously Humboldt Fellow in Environmental
+Meteorology, Univ. Freiburg. Fixed-term — she wants an INDUSTRY or senior-research role
+in/around her field, in Munich or remote, moving from academia into applied work.
 
-EMPLOYABLE NICHE (what to surface — broader than her PhD thesis topic): real
-professional roles at the intersection of CLIMATE / SUSTAINABILITY / ENERGY + DATA
-SCIENCE / AI / STATISTICAL MODELING + SIMULATION + CONSULTING, in industry OR senior
-research (NOT PhD-student / intern / Werkstudent). Concretely in scope:
-- Climate / energy / sustainability DATA SCIENTIST or ANALYST; ML / analytics engineer.
-- ESG / decarbonisation / carbon-accounting / CSRD analyst or specialist.
-- Climate-risk / NatCat / catastrophe analytics (e.g. reinsurance — Munich is the hub).
-- Building- / urban-climate SIMULATION & energy-modelling engineer.
-- GIS / geospatial / remote-sensing / earth-observation analyst.
-- Sustainability / climate CONSULTANT; research scientist at a climate institute / impact org.
+WHO SHE IS (match roles to THIS — she is NOT a generic data/economic/finance analyst):
+- Architect / building scientist specialising in PERSONALIZED THERMAL COMFORT (indoor &
+  outdoor; PET/UTCI/mPET/SET*), BUILDING PHYSICS, and CLIMATE-RESPONSIVE DESIGN.
+- BUILDING & ENERGY SIMULATION power-user: EnergyPlus, ENVI-met, RayMan, DIALux, Ecotect;
+  HVAC/façade coupling, BMS / adaptive setpoints, building-performance modelling.
+- URBAN MICROCLIMATE & field methods: sensor networks, microclimate measurement campaigns;
+  urban heat, heat-mitigation, climate-resilient & health-oriented urban/architectural design.
+- AI/ML APPLIED TO THE BUILT ENVIRONMENT: Python (pandas, scikit-learn, TensorFlow);
+  statistical/uncertainty modelling for comfort & building/energy data. (Python only —
+  NOT SQL/BI/R; NOT a generic data analyst.)
+- Languages: English C1, German B2 (NOT fluent), Turkish C1, Persian/Azerbaijani native.
 
-DEEP DOMAIN (a PLUS, NOT required): outdoor/semi-outdoor THERMAL COMFORT (PET, UTCI,
-mPET), urban biometeorology / microclimate, urban heat & climate adaptation, sustainable
-building / building physics (Bauphysik, DGNB/LEED), AI for the built environment.
-Power-user of ENVI-met, RayMan, SkyHelios (familiar with EnergyPlus/IES/DesignBuilder).
-Strong Python, R, SQL, ML, statistics, scientific modeling, GIS. A climate-data-scientist
-/ energy-modelling role with NO thermal-comfort angle is FULLY in scope and should score
-high — deep-domain overlap is a bonus on top, never a gate.
+IN SCOPE (score high) — INDUSTRY or senior research, Munich/remote, in/adjacent to her field:
+- Climate / façade / building-energy ENGINEERING consultancies (Transsolar, Werner Sobek,
+  Drees & Sommer, Arup, Buro Happold, ee-concept …): building physics, comfort, daylight/
+  thermal/energy simulation, sustainability.
+- SUSTAINABLE / GREEN building & building-performance roles (DGNB/LEED, energy-efficient /
+  decarbonising buildings), HVAC/comfort engineering, smart-building / BMS / PropTech.
+- URBAN CLIMATE / climate-adaptation / climate-resilience / heat-mitigation roles at
+  planning, engineering, city or research organisations.
+- AI/ML or SIMULATION roles SPECIFICALLY for buildings / energy / climate / the built
+  environment.
+- Senior RESEARCH SCIENTIST in building science / urban climate (Munich or remote only).
+- Physical-climate-RISK / climate-impact modelling where her climate-science + Python fit
+  (e.g. reinsurance climate risk) — adjacent; score on the climate-modelling overlap.
 
-STRETCH ROLES WITH A HOOK (surface ONLY when a genuine personal hook applies, and NAME
-the hook in `reason`): pre-sales / solutions / customer-success / application engineer at
-a building-/climate-SIMULATION-SOFTWARE vendor (she is a power-user of those tools);
-technical / engineering RECRUITING (she reads engineer & researcher CVs natively and has
-a top one). Do NOT surface generic sales / recruiting / HR with no hook.
+STRETCH ROLES WITH A HOOK (surface ONLY with the hook NAMED in `reason`):
+- Pre-sales / solutions / customer-success / application engineer at a BUILDING-/CLIMATE-
+  SIMULATION-SOFTWARE vendor (EnergyPlus/IES/DesignBuilder/ENVI-met/DIALux/Ladybug) — she
+  is a daily power-user of these tools.
+- Technical / engineering recruiting (she reads engineer & researcher CVs natively).
+- Technical / scientific writing or science communication in her domain.
 
-LANGUAGES: English FLUENT (works in English); Persian native; German only B2 (NOT
-fluent/native). PENALISE roles needing fluent/native German (customer-facing public-
-sector, legal, HR, heavy German writing) and German construction-industry / Baugewerbe
-roles (she has never worked in DE construction). FLAG, don't always discard.
+OUT OF SCOPE (score LOW even if "climate" or "data" appears in the title):
+- GENERIC data scientist / data analyst / business-intelligence / quantitative / market /
+  ECONOMIC / financial / controlling / accounting analyst, or generic software-engineering,
+  with NO building/climate/built-environment angle — she lacks SQL/BI/finance/economics and
+  would be screened out.
+- Academic PhD-student / fellowship roles, and pure-academic postdocs OUTSIDE Munich-or-
+  remote — prefer INDUSTRY over yet-another-postdoc.
+- Roles needing fluent/native German, or German construction-trade / on-site Bau experience.
 
-LOCATION (hard): Munich / Greater Munich on-site or hybrid, OR genuine Germany-/EU-
-eligible REMOTE. NOT US-only remote; NOT other-German-city / EU on-site.
-
-PAY: aim for >= EUR 3.5k NET/month (~EUR 70-75k gross/yr in DE). Penalise clearly junior
-/ below-floor roles. SENIORITY: she fits mid/senior IC & consultant roles; mild
-overqualification is fine, but clearly-junior roles raise overqualification/flight-risk.
+LOCATION (hard): Munich / Greater Munich on-site or hybrid, OR genuine Germany-/EU-eligible
+REMOTE. NOT US-only remote; NOT other-German-city / EU on-site.
+PAY: aim for >= EUR 3.5k NET/month (~EUR 70-75k gross/yr in DE).
 """
 
 SCORING_INSTRUCTIONS = """\
 You score how well a single job posting fits the candidate above. Return a fit score 0-100.
 
 Weighting:
-- EMPLOYABLE-NICHE FIT (highest weight): climate / sustainability / energy + data-science
-  / AI / modeling / consulting, in industry or senior research. A clear fit -> 70-100.
-  DEEP-DOMAIN overlap (thermal comfort, urban microclimate, building physics, climate
-  adaptation) is a strong BONUS on top — but its ABSENCE is NOT a penalty if the role is
-  otherwise in her employable niche (a climate data scientist with no thermal angle = high).
-- REALISTIC CHANCE / SENIORITY: reward roles where she is correctly-qualified or only
-  mildly overqualified. Pure PhD-student / intern / Werkstudent -> low. Severely-junior or
-  clearly-below-pay-floor roles -> low (overqualification / flight-risk).
-- LOCATION FIT: Munich/Bayern or genuine Germany-/EU-eligible remote -> boost; other
-  German city / EU on-site, or US-only remote -> penalize.
+- BUILT-ENVIRONMENT / BUILDING-CLIMATE FIT (highest weight): building physics, thermal
+  comfort, climate-responsive design, building & energy simulation, sustainable/green
+  building, building performance, HVAC/façade/comfort engineering, smart-building/BMS,
+  urban microclimate / climate-adaptation, or AI/ML for the BUILT ENVIRONMENT -> 80-100.
+- ADJACENT (score 50-75): physical-climate-RISK / climate-impact modelling she could do
+  with climate-science + Python (e.g. reinsurance), climate/sustainability roles with a
+  clear technical / built-environment angle, building-simulation-software vendor roles
+  (with the power-user hook named).
+- OUT (score 0-30): GENERIC data scientist / data analyst / BI / quantitative / market /
+  ECONOMIC / financial / controlling / accounting analyst, or generic software-engineering,
+  with NO building/climate/built-environment angle — she is a building scientist with
+  domain-specific Python/ML, NOT a generic data/finance analyst, and would be screened out.
+  Also OUT: PhD-student / intern; pure-academic postdoc outside Munich-or-remote.
+- LOCATION FIT: Munich/Bayern or genuine Germany-/EU-eligible remote -> ok; other German
+  city / EU on-site, or US-only remote -> LOW.
 - LANGUAGE: English-working -> boost; fluent/native German required -> penalize (her
-  German is B2), but still surface if niche fit is very high.
+  German is B2), but still surface if built-environment fit is very high.
 - PAY: aim >= EUR 3.5k net/mo (~EUR 70-75k gross/yr DE); clearly low-paid -> penalize.
 
 STRETCH-WITH-A-HOOK: a role outside her proven skills BUT where she has one genuine hook
 — pre-sales / solutions / customer-success / application-engineer at a building-/climate-
-SIMULATION-SOFTWARE vendor (she's a power-user of the tools), or technical / engineering
-recruiting (she reads engineer/researcher CVs) — score 45-65 and STATE THE HOOK in
-`reason`. Generic sales / recruiting / HR with no hook -> low.
+SIMULATION-SOFTWARE vendor (she's a power-user of EnergyPlus/ENVI-met/RayMan/DIALux), or
+technical / engineering recruiting (she reads engineer/researcher CVs), or technical /
+scientific writing in her domain — score 45-65 and STATE THE HOOK in `reason`. Generic
+sales / recruiting / HR / data-analyst with no hook -> low.
 
-Be calibrated. Reserve 70+ for genuine employable-niche fits she could realistically land
-that are Munich/remote and English-doable. (Recall mode while she job-hunts.)
+Be calibrated. Reserve 70+ for genuine built-environment / building-climate fits she could
+realistically land that are Munich/remote and English-doable. (Recall mode while she job-hunts.)
 
 For each posting return:
   score          : integer 0-100
@@ -287,12 +303,13 @@ ANTI-SCAM / REALISM (hard down-weight):
 
 # Coarse first-pass instructions for the Haiku prefilter (the niche track).
 MAIN_PREFILTER_INSTRUCTIONS = (
-    "Quickly rate each posting's RELEVANCE to her EMPLOYABLE niche on 0-100 — climate / "
-    "sustainability / energy + data-science / AI / modeling / simulation / consulting "
-    "(industry or senior research), NOT just her thermal-comfort thesis topic. This is a "
-    "coarse first pass — be generous to anything plausibly in that employable niche "
-    "(incl. data scientist/analyst, ESG, climate-risk, energy/GIS roles), harsh on "
-    "clearly off-topic roles. Return only id and score for each."
+    "Quickly rate each posting's RELEVANCE to a BUILDING SCIENTIST / ARCHITECT (building "
+    "physics, thermal comfort, climate-responsive design, building & energy simulation, "
+    "sustainable building, urban microclimate / climate-adaptation, AI/ML for the built "
+    "environment) on 0-100. Coarse first pass — be generous to anything in the built-"
+    "environment / building-climate space (incl. building simulation, sustainability-in-"
+    "buildings, climate-risk modelling), but HARSH on generic data/economic/finance/BI/"
+    "market-analyst or generic software roles with no building/climate angle. id + score only."
 )
 
 
@@ -300,29 +317,41 @@ MAIN_PREFILTER_INSTRUCTIONS = (
 # Same person, different lens: instead of her research niche, find decently-paid
 # jobs she could land QUICKLY and EASILY, strictly in Munich or fully remote.
 EASY_RUBRIC = """\
-CANDIDATE (same person, different lens): Dr. Sevil Zafarmandi — PhD, postdoctoral
-researcher. Fluent ENGLISH, native Persian, German only B2 (NOT fluent). Strong
-transferable skills: research & analysis, statistics / data analysis, Python/R/SQL/ML,
-scientific & technical writing, simulation & GIS tools, sustainability & climate domain
-knowledge, project work. Never worked in the German construction industry.
+CANDIDATE (same person, different lens): Dr.-Ing. Sevil Zafarmandi — ARCHITECT & BUILDING
+SCIENTIST (thermal comfort, building physics, climate-responsive design, building/energy
+simulation). English C1, German B2 (NOT fluent), Turkish C1, Persian/Azerbaijani native.
+Real transferable strengths: building-/climate-domain expertise, applied Python + ML
+(pandas/scikit-learn/TensorFlow) on building & comfort data, building & energy simulation
+tools (EnergyPlus/ENVI-met/RayMan/DIALux), scientific & technical writing, science
+communication, research & project management, teaching. She does NOT have SQL/BI/R or a
+finance/economics background. Never worked in the German construction trade.
 
-GOAL OF THIS CHANNEL ("easy track"): surface jobs OUTSIDE her research niche that she
-could realistically land FAST — where she is clearly qualified/OVERqualified (or has a
-genuine personal hook), the barrier is low, AND the pay is solid. The bar is "a reliable,
-well-paid job she can ACTUALLY get soon", NOT "any job".
+GOAL OF THIS CHANNEL ("easy track"): surface broader / adjacent jobs she could land FAST
+that LEVERAGE HER REAL STRENGTHS — where she is clearly qualified (or has a genuine hook),
+the barrier is low, AND the pay is solid. "A reliable, well-paid job she can ACTUALLY get
+soon", NOT "any job".
 
-IN SCOPE (broad, but realistic):
-- Adjacent professional roles leveraging her PhD/English: sustainability/ESG/climate
-  analyst or consultant, data/GIS/quantitative analyst, research associate (NOT
-  PhD-student), project/operations/program coordinator or manager, university/research-
-  institute staff, technical/scientific writer WITH a portfolio.
-- Broad decently-paid English-friendly office roles she could get fast even outside her
-  field: analysis, coordination, operations, program/project management, knowledge work.
-- STRETCH ROLES WITH A HOOK (only when a genuine hook applies, and NAME it): technical /
-  engineering recruiting (she reads engineer & researcher CVs natively and has a top one);
-  pre-sales / solutions / customer-success / application engineer at a building-/climate-
-  SIMULATION-SOFTWARE vendor (she is a power-user of those tools); ESG/sustainability
-  customer-success (her domain). Generic sales / recruiting / HR with NO hook is OUT.
+IN SCOPE (broad but REALISTIC — must match her actual strengths):
+- Building / climate / sustainability roles in industry she could land easily: building-
+  performance / energy / sustainability consultant or analyst at AEC / engineering /
+  PropTech firms; sustainability/ESG roles with a TECHNICAL or building/climate angle.
+- Roles leveraging her writing/communication: technical / scientific writer or editor,
+  science communicator, content for climate/building/engineering topics.
+- Research / project / programme COORDINATION or management at research institutes,
+  universities, NGOs, engineering or climate organisations.
+- Teaching / lecturing / training in her subject area.
+- Applied-Python / ML or simulation roles tied to BUILDINGS / energy / climate / the
+  physical world (NOT generic business-data roles).
+- STRETCH ROLES WITH A HOOK (only when the hook applies, and NAME it): technical /
+  engineering recruiting (she reads engineer & researcher CVs); pre-sales / solutions /
+  customer-success / application engineer at a building-/climate-SIMULATION-SOFTWARE vendor
+  (power-user); ESG/sustainability customer-success (her domain).
+
+OUT OF SCOPE (score LOW even with a nice title): GENERIC data scientist / data analyst /
+business-intelligence / quantitative / MARKET / ECONOMIC / financial / controlling /
+accounting analyst, generic sales/BD, HR/recruiting (no hook), UX-with-portfolio,
+clinical/CRA, SEO/marketing-content — she lacks SQL/BI/finance/economics and would be
+screened out fast.
 
 HARD CONSTRAINTS (this channel is strict):
 - LOCATION: MUNICH / Greater Munich / Bavaria on-site, OR genuine remote workable from
@@ -345,9 +374,12 @@ Munich-or-remote, realistic-chance" goal above. Return a fit score 0-100.
 
 Weighting:
 - REALISTIC CHANCE OF LANDING (highest weight): is she clearly qualified/OVERqualified, or
-  does she have a stated genuine hook, with a low barrier and fast hiring? -> high. Needs
-  skills/licences/experience she lacks (pure sales/BD, recruiting/HR, UX-portfolio,
-  clinical/CRA, content/SEO writing, a German cert) with NO hook -> LOW.
+  does she have a stated genuine hook, with a low barrier and fast hiring? -> high. Roles
+  needing skills she lacks with NO hook -> LOW: pure sales/BD, recruiting/HR, UX-portfolio,
+  clinical/CRA, content/SEO writing, a German cert — AND generic data scientist / data
+  analyst / BI / quantitative / market / ECONOMIC / financial / controlling / accounting
+  analyst (she is a building scientist with domain-specific Python/ML, NOT a SQL/BI/finance
+  analyst, and gets screened out of these).
 - LOCATION (hard gate): Munich/Bavaria on-site OR genuine Germany-eligible remote -> ok;
   other German city / EU on-site / US-only remote -> LOW.
 - PAY & LEVEL (hard gate): must plausibly clear EUR 3,500 net/mo (~EUR 70-75k gross/yr),
@@ -440,10 +472,10 @@ SOURCES: list[dict[str, Any]] = [
         "name": "academics.de",
         "tier": "A",
         "type": "academics",
-        # Mix: a few employable-niche/industry-adjacent terms + her deep-domain terms.
+        # Building-science / climate research terms (her real field).
         "queries": [
-            "Data Scientist", "Nachhaltigkeit", "Klimadaten", "Energiesystemanalyse",
-            "Stadtklima", "Klimaanpassung", "urban climate", "Umweltdaten",
+            "Bauphysik", "thermischer Komfort", "Stadtklima", "Klimaanpassung",
+            "nachhaltiges Bauen", "Gebäudesimulation", "urban climate", "building physics",
         ],
         "verified": True,
     },
@@ -455,12 +487,12 @@ SOURCES: list[dict[str, Any]] = [
         "name": "Arbeitsagentur (niche)",
         "tier": "A",
         "type": "bundesagentur",
-        # Retargeted to industry climate/sustainability/energy + data terms (was
-        # Stadtklima/Bauphysik only — missed Munich Re, utilities, consultancies).
+        # Building/climate INDUSTRY German terms (her real field — building physics,
+        # building simulation, sustainable building, climate adaptation).
         "queries": [
-            "Data Scientist", "Datenanalyst", "Klimadaten", "Nachhaltigkeit",
-            "ESG", "Energiedatenanalyse", "Energiesystemanalyse", "Klimarisiko",
-            "Geoinformatik", "Dekarbonisierung", "Nachhaltigkeitsberater", "Klimaanpassung",
+            "Bauphysik", "Gebäudesimulation", "Energieeffizienz Gebäude", "Bauklimatik",
+            "Nachhaltigkeit Gebäude", "Fassadenplanung", "Gebäudetechnik", "Klimaanpassung",
+            "Stadtklima", "thermischer Komfort", "Nachhaltigkeitsberatung", "Klimarisiko",
         ],
         "veroeffentlichtseit": 14,
         "verified": True,
@@ -507,21 +539,21 @@ SOURCES: list[dict[str, Any]] = [
         # Each surfaces her niche across EURAXESS / Nature / university boards;
         # junk domains are filtered and the LLM scores the rest. (Verified live:
         # returns MSCA fellowships, urban-microclimate postdocs, urban-heat PhDs.)
-        # Retargeted to her EMPLOYABLE niche (industry climate/energy + data roles),
+        # Retargeted to her REAL field — building/climate engineering & simulation,
         # Munich + remote-Germany/EU; the location gate keeps only Munich/remote.
         "queries": [
-            "climate data scientist Munich",
-            "climate data scientist remote Germany",
-            "sustainability data analyst Munich English",
-            "ESG data analyst remote Europe",
-            "energy data scientist remote Germany",
-            "decarbonisation analyst remote Germany",
-            "climate risk analytics Munich",
-            "carbon accounting analyst remote Europe",
-            "geospatial analyst climate remote Germany",
-            "building energy simulation engineer Munich",
-            "sustainability consultant Munich English",
-            "climate tech data scientist remote Europe",
+            "building physics engineer Munich",
+            "building simulation engineer remote Germany",
+            "facade engineering Munich English",
+            "sustainable building consultant Munich",
+            "energy efficiency buildings engineer Munich",
+            "thermal comfort consultant remote Europe",
+            "climate engineering Munich English",
+            "climate adaptation urban planning Munich",
+            "building performance simulation remote Europe",
+            "green building DGNB consultant Munich",
+            "climate risk modelling Munich English",
+            "daylight simulation engineer Europe",
         ],
         "verified": True,
     },
@@ -1608,25 +1640,20 @@ _DOMAIN = re.compile(
     r"comfort engineering|livability|resilien|"
     r"outdoor comfort|wind comfort|solar radiation|"
     r"raumklima|innenraumklima|gebäudeklimatik|"
-    # --- employable niche: climate/sustainability/energy + data/AI/modeling ---
-    r"climate data|climate scientist|climate risk|climate analytics|climate tech|climate impact|"
-    r"catastrophe model|cat model|nat.?cat|natural catastrophe|risk analytics|"
-    r"sustainab|nachhaltigkeitsmanager|nachhaltigkeitsberater|"
-    r"esg|decarboni[sz]|dekarbonisierung|net.?zero|"
-    r"carbon account|carbon footprint|co2.?bilanz|ghg|greenhouse gas|treibhausgas|scope 3|"
-    r"energy data|energiedaten|energy model|energiemodell|energy system|energiesystem|"
-    r"energy analyst|energy analytics|energiewende|renewable|erneuerbare|photovolta|"
-    r"load forecast|"
-    r"geospatial|geodaten|remote sensing|fernerkundung|earth observation|satellite data|"
-    r"gis analyst|spatial analy|geoinformati|"
-    r"life cycle assessment|lebenszyklusanalyse|lca|ökobilanz|"
-    r"data scientist|data analyst|datenanalyst|machine learning|ml engineer|ai engineer|"
-    r"applied scientist|research scientist|quantitative analyst|"
-    r"simulation engineer|energy simulation|building simulation|thermal simulation|"
-    r"energyplus|designbuilder|ladybug|"
+    # --- employable: building/climate industry + simulation + climate-risk ---
+    r"building energy|building performance|gebäudeenergie|gebäudetechnik|hochbau|"
+    r"smart building|gebäudeautomation|bms|hvac|hlk|tga|daylight|tageslicht|"
+    r"climate engineering|klimaengineering|climate impact|climate risk|"
+    r"catastrophe model|nat.?cat|"
+    r"sustainability|nachhaltigkeit|esg|decarboni[sz]|dekarbonisierung|net.?zero|"
+    r"carbon footprint|carbon account|co2.?bilanz|"
+    r"life cycle assessment|lebenszyklus|lca|ökobilanz|breeam|"
+    r"energy efficien\w*|energieeffizienz|energiewende|renewable energ\w*|erneuerbare energ\w*|photovolta\w*|"
+    r"building simulation|energy simulation|thermal simulation|gebäudesimulation|"
+    r"energyplus|designbuilder|ladybug|dialux|ecotect|"
     # --- stretch-with-hook (sim-software vendor / technical) ---
     r"application engineer|pre.?sales|presales|solutions engineer|customer success|"
-    r"technical consultant|implementation consultant"
+    r"simulation engineer|technical consultant|implementation consultant"
     r")\b",
     re.I,
 )
