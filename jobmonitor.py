@@ -326,10 +326,12 @@ tools (EnergyPlus/ENVI-met/RayMan/DIALux), scientific & technical writing, scien
 communication, research & project management, teaching. She does NOT have SQL/BI/R or a
 finance/economics background. Never worked in the German construction trade.
 
-GOAL OF THIS CHANNEL ("easy track"): surface broader / adjacent jobs she could land FAST
-that LEVERAGE HER REAL STRENGTHS — where she is clearly qualified (or has a genuine hook),
-the barrier is low, AND the pay is solid. "A reliable, well-paid job she can ACTUALLY get
-soon", NOT "any job".
+GOAL OF THIS CHANNEL ("easy track"): surface broad professional jobs OUTSIDE her exact
+building-science niche that she could land FAST and that pay WELL. These need NOT be a
+perfect fit for her research field — the test is just (1) she is clearly qualified or
+OVERqualified (or has a genuine stated hook), so it is genuinely EASY for HER to land, and
+(2) it pays above the salary floor below. "A reliable, well-paid job she can ACTUALLY get
+soon" — NOT "any job", and NOT a role she would be screened out of (see OUT OF SCOPE).
 
 IN SCOPE (broad but REALISTIC — must match her actual strengths):
 - Building / climate / sustainability roles in industry she could land easily: building-
